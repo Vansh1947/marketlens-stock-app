@@ -7,8 +7,7 @@ import os
 import pandas as pd
 import numpy as np
 from textblob import TextBlob
-from datetime import datetime, timedelta
-import argparse # Added for command-line arguments
+from datetime import datetime, timedelta # argparse removed as it's unused
 
 # Conditional imports for external APIs
 try:
@@ -16,6 +15,13 @@ try:
 except ImportError:
     yf = None
     print("Warning: 'yfinance' library not found. Stock data functionalities will be skipped.")
+
+try:
+    import pandas_ta as ta
+except ImportError:
+    ta = None
+    print("Warning: 'pandas-ta' library not found. Technical indicators will be skipped.")
+    print("Please install it by running: pip install pandas-ta")
 
 try:
     from newsapi import NewsApiClient
@@ -31,13 +37,6 @@ except ImportError:
     print("Warning: 'newsapi-python' library not found. NewsAPI functionalities will be skipped.")
 
 try:
-    import talib
-except ImportError:
-    talib = None
-    print("Warning: 'TA-Lib' not found. Technical indicators will be skipped.")
-    print("Refer to TA-Lib documentation for installation: https://github.com/mrjbq7/ta-lib")
-
-try:
     import feedparser
 except ImportError:
     feedparser = None
@@ -51,11 +50,8 @@ except ImportError:
 
 
 # --- IMPORTANT: INSTALL NECESSARY LIBRARIES ---
-# If you encounter ModuleNotFoundError, run these commands in your terminal:
-# pip install yfinance textblob newsapi-python feedparser requests gnews
-#
-# Note: TA-Lib might require additional system-level dependencies.
-# Refer to TA-Lib documentation for specific OS installation instructions.
+# If you encounter ModuleNotFoundError for the libraries below, run:
+# pip install yfinance textblob newsapi-python feedparser gnews pandas-ta
 # --- END OF INSTALLATION INSTRUCTIONS ---
 
 
@@ -126,8 +122,8 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
     Returns:
         dict: A dictionary containing calculated technical indicators.
     """
-    if talib is None:
-        print("TA-Lib not available. Skipping technical indicator calculations.")
+    if ta is None:
+        print("pandas-ta not available. Skipping technical indicator calculations.")
         return {}
 
     df = historical_data.copy()
@@ -135,7 +131,9 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
 
     # Ensure enough data for indicators
     if len(df) < 200: # Max window size for SMAs
-        print(f"Warning: Not enough historical data ({len(df)} rows) for all indicators (need up to 200).")
+        # pandas-ta might also print its own warnings if data is insufficient for certain indicators
+        # but this general warning is still good.
+        print(f"Warning: Not enough historical data ({len(df)} rows) for some indicators (e.g., SMA200 needs 200).")
 
     # Simple Moving Averages
     indicators['SMA_5'] = df['Close'].rolling(window=5).mean().iloc[-1] if len(df) >= 5 else None
@@ -144,20 +142,27 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
     indicators['SMA_200'] = df['Close'].rolling(window=200).mean().iloc[-1] if len(df) >= 200 else None
 
     # Relative Strength Index (RSI)
-    if len(df) >= 14:
-        indicators['RSI'] = talib.RSI(df['Close'].values, timeperiod=14)[-1]
+    # pandas-ta handles data length checks internally
+    rsi_series = df.ta.rsi(length=14)
+    if rsi_series is not None and not rsi_series.empty:
+        indicators['RSI'] = rsi_series.iloc[-1]
     else:
         indicators['RSI'] = None
 
     # Moving Average Convergence Divergence (MACD)
-    if len(df) >= 35: # Requires at least 26+9 for standard MACD
-        macd, macdsignal, macdhist = talib.MACD(df['Close'].values,
-                                                fastperiod=12, slowperiod=26, signalperiod=9)
-        indicators['MACD'] = macd[-1]
-        indicators['MACD_Signal'] = macdsignal[-1]
+    # pandas-ta returns a DataFrame for MACD
+    # Standard MACD (12,26,9) needs about 34 periods for full calculation.
+    # pandas-ta will return NaNs if data is insufficient.
+    macd_df = df.ta.macd(fast=12, slow=26, signal=9, append=False) # Use append=False to get only the MACD columns
+    if macd_df is not None and not macd_df.empty:
+        # Columns are typically named like 'MACD_12_26_9', 'MACDh_12_26_9', 'MACDs_12_26_9'
+        indicators['MACD'] = macd_df.iloc[-1].get(f'MACD_12_26_9')
+        indicators['MACD_Signal'] = macd_df.iloc[-1].get(f'MACDs_12_26_9')
+        indicators['MACD_Hist'] = macd_df.iloc[-1].get(f'MACDh_12_26_9') # Added histogram
     else:
         indicators['MACD'] = None
         indicators['MACD_Signal'] = None
+        indicators['MACD_Hist'] = None
 
     # Volume Simple Moving Average
     indicators['Volume_SMA_5'] = df['Volume'].rolling(window=5).mean().iloc[-1] if len(df) >= 5 else None
@@ -763,7 +768,7 @@ if __name__ == "__main__":
                 else:
                     print(f"{k}: Not enough data")
         else:
-            print("Technical indicators skipped (TA-Lib not available or insufficient data).")
+            print("Technical indicators skipped (pandas-ta not available or insufficient data).")
 
 
         # 3. Fetch News Sentiment (from NewsAPI and RSS)

@@ -19,13 +19,13 @@ import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Conditional talib import for plotting specific indicators
+# Conditional pandas_ta import for plotting specific indicators
 try:
-    import talib
+    import pandas_ta as ta
 except ImportError:
-    talib = None
-    # stock.py already warns about TA-Lib missing for core calculations.
-    # Plotting functions will handle talib being None.
+    ta = None
+    # stock.py already warns about pandas-ta missing for core calculations.
+    # Plotting functions will handle pandas-ta (aliased as ta) being None.
 
 # Re-read environment variables inside the app or pass them
 APP_NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
@@ -80,37 +80,61 @@ def create_price_volume_chart(df_hist, ticker):
     return fig
 
 def create_rsi_chart(df_hist, ticker):
-    """Creates an RSI chart if TA-Lib is available and data is sufficient."""
-    if not talib or df_hist is None or len(df_hist) < 14: # RSI typically needs 14 periods
+    """Creates an RSI chart if pandas-ta is available and data is sufficient."""
+    if not ta or df_hist is None or df_hist['Close'].isnull().all() or len(df_hist) < 14: # RSI typically needs 14 periods
         return None
     try:
-        rsi_series = talib.RSI(df_hist['Close'].values, timeperiod=14)
+        rsi_series = df_hist.ta.rsi(length=14)
+        if rsi_series is None or rsi_series.isnull().all():
+            st.write("RSI could not be calculated (possibly insufficient data).")
+            return None
+
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_hist.index[13:], y=rsi_series[13:], mode='lines', name='RSI')) # Adjust index for RSI output
+        fig.add_trace(go.Scatter(x=rsi_series.index, y=rsi_series, mode='lines', name='RSI'))
         fig.add_hline(y=70, line_dash="dash", line_color="#EF5350", annotation_text="Overbought (70)", annotation_position="bottom right") # Specific Red
         fig.add_hline(y=30, line_dash="dash", line_color="#66BB6A", annotation_text="Oversold (30)", annotation_position="bottom right") # Specific Green
         fig.update_layout(title_text=f'{ticker} Relative Strength Index (RSI)',
                           xaxis_title='Date', yaxis_title='RSI', yaxis_range=[0,100])
         return fig
     except Exception as e:
-        st.error(f"Error creating RSI chart: {e}")
+        st.error(f"Error creating RSI chart with pandas-ta: {e}")
         return None
 
 def create_macd_chart(df_hist, ticker):
-    """Creates a MACD chart if TA-Lib is available and data is sufficient."""
-    if not talib or df_hist is None or len(df_hist) < 35: # MACD standard (12,26,9) needs about 34 periods
+    """Creates a MACD chart if pandas-ta is available and data is sufficient."""
+    if not ta or df_hist is None or df_hist['Close'].isnull().all() or len(df_hist) < 34: # MACD (12,26,9) needs ~34 periods
         return None
     try:
-        macd, macdsignal, macdhist = talib.MACD(df_hist['Close'].values, fastperiod=12, slowperiod=26, signalperiod=9)
+        fast_period, slow_period, signal_period = 12, 26, 9
+        # Use append=False so it doesn't modify df_hist, returns only MACD columns
+        macd_df = df_hist.ta.macd(fast=fast_period, slow=slow_period, signal=signal_period, append=False)
+
+        if macd_df is None or macd_df.empty:
+            st.write("MACD could not be calculated (possibly insufficient data).")
+            return None
+
+        # Define column names based on pandas-ta convention
+        macd_line_col = f'MACD_{fast_period}_{slow_period}_{signal_period}'
+        signal_line_col = f'MACDs_{fast_period}_{slow_period}_{signal_period}'
+        hist_col = f'MACDh_{fast_period}_{slow_period}_{signal_period}'
+
+        if not all(col in macd_df.columns for col in [macd_line_col, signal_line_col, hist_col]):
+            st.error(f"MACD columns not found in pandas-ta output. Expected: {macd_line_col}, {signal_line_col}, {hist_col}")
+            return None
+
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_hist.index[33:], y=macd[33:], mode='lines', name='MACD Line', line=dict(color='#29B6F6'))) # Specific Blue
-        fig.add_trace(go.Scatter(x=df_hist.index[33:], y=macdsignal[33:], mode='lines', name='Signal Line', line=dict(color='#FFA726'))) # Specific Orange
-        colors = ['#26A69A' if val >= 0 else '#EF5350' for val in macdhist[33:]] # Specific Green/Red for histogram
-        fig.add_trace(go.Bar(x=df_hist.index[33:], y=macdhist[33:], name='MACD Histogram', marker_color=colors)) # Adjust index
+        fig.add_trace(go.Scatter(x=macd_df.index, y=macd_df[macd_line_col], mode='lines', name='MACD Line', line=dict(color='#29B6F6')))
+        fig.add_trace(go.Scatter(x=macd_df.index, y=macd_df[signal_line_col], mode='lines', name='Signal Line', line=dict(color='#FFA726')))
+        
+        macd_hist_values = macd_df[hist_col].dropna() # Drop NaNs for color calculation and plotting
+        if not macd_hist_values.empty:
+            colors = ['#26A69A' if val >= 0 else '#EF5350' for val in macd_hist_values]
+            fig.add_trace(go.Bar(x=macd_hist_values.index, y=macd_hist_values, name='MACD Histogram', marker_color=colors))
+
         fig.update_layout(title_text=f'{ticker} MACD', xaxis_title='Date', yaxis_title='MACD Value')
         return fig
     except Exception as e:
-        st.error(f"Error creating MACD chart: {e}")
+        st.error(f"Error creating MACD chart with pandas-ta: {e}")
         return None
 
 # Sidebar for API Key Status
@@ -164,14 +188,14 @@ if st.button("Analyze Stock"):
             else:
                 st.write("Could not generate price/volume chart.")
 
-            if talib: # Only attempt to plot TA-lib based charts if talib is available
+            if ta: # Only attempt to plot pandas-ta based charts if ta is available
                 st.subheader("Technical Indicator Charts")
                 with st.expander("📈 RSI Chart", expanded=False): # Added emoji
                     fig_rsi = create_rsi_chart(historical_data, ticker_symbol_processed)
                     if fig_rsi:
                         st.plotly_chart(fig_rsi, use_container_width=True)
                     else:
-                        st.write("Could not generate RSI chart (not enough data or TA-Lib issue).")
+                        st.write("Could not generate RSI chart (not enough data or pandas-ta issue).")
 
                 # Initialize fig_macd before the expander
                 fig_macd = None 
@@ -180,9 +204,9 @@ if st.button("Analyze Stock"):
                     if fig_macd:
                         st.plotly_chart(fig_macd, use_container_width=True)
                     else:
-                        st.write("Could not generate MACD chart (not enough data or TA-Lib issue).")
+                        st.write("Could not generate MACD chart (not enough data or pandas-ta issue).")
             else:
-                st.info("TA-Lib library not found. Advanced technical indicator charts (RSI, MACD) are unavailable for plotting.")
+                st.info("pandas-ta library not found. Advanced technical indicator charts (RSI, MACD) are unavailable for plotting.")
 
             # 2. Calculate Technical Indicators
             st.markdown("---") # Visual separator
@@ -195,7 +219,7 @@ if st.button("Analyze Stock"):
                         else:
                             st.write(f"{k}: Not enough data")
                 else:
-                    st.write("Technical indicators skipped (TA-Lib not available or insufficient data).")
+                    st.write("Technical indicators skipped (pandas-ta not available or insufficient data).")
 
 
             # 3. Fetch News Sentiment (from NewsAPI and RSS)
