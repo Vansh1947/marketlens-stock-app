@@ -7,7 +7,7 @@ import os
 import pandas as pd
 import numpy as np
 from textblob import TextBlob
-from datetime import datetime, timedelta # argparse removed as it's unused
+from datetime import datetime, timedelta
 
 # Conditional imports for external APIs
 try:
@@ -92,8 +92,8 @@ else:
 gnews_client = None
 if GNEWS_API_KEY:
     if GNews:
-        gnews_client = GNews()  # Remove the 'api_key' argument
-        print("GNews client initialized.")
+        gnews_client = GNews(max_results=20, period='7d')  # Fetch up to 20 articles from the last 7 days
+        print("GNews client initialized (max_results=20, period=7d).")
     else:
         print("GNews client could not be initialized. 'gnews' library not found.")
 else:
@@ -123,7 +123,6 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
         dict: A dictionary containing calculated technical indicators.
     """
     if ta is None:
-        print("pandas-ta not available. Skipping technical indicator calculations.")
         return {}
 
     df = historical_data.copy()
@@ -732,7 +731,6 @@ def generate_signal(impact: dict) -> str:
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    import sys # Import sys for sys.exit()
     # Get ticker symbol from user input
     while True:
         ticker_input = input("Please enter the stock ticker symbol to analyze (e.g., AAPL, GOOG): ")

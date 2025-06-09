@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import sys # Add this import
 
 st.set_page_config(
     page_title="MarketLens - Stock Analysis",
@@ -30,11 +31,13 @@ except ImportError:
 # Re-read environment variables inside the app or pass them
 APP_NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 APP_GNEWS_API_KEY = os.environ.get("GNEWS_API_KEY") # GNews API Key re-added
-# APP_OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") # Removed
 
 # Note: The newsapi_client used by fetch_news_sentiment_from_newsapi
 # is initialized in stock.py.
 
+    # Print the Python executable Streamlit is using
+st.write(f"Streamlit is using Python: {sys.executable}")
+    
 # --- Plotting Functions ---
 def create_price_volume_chart(df_hist, ticker):
     """Creates a Candlestick price chart with SMAs and a Volume bar chart."""
@@ -281,14 +284,14 @@ if st.button("Analyze Stock"):
 
             # 5. Enhanced Analysis
             st.markdown("---") # Visual separator
-            social_media_sentiment_placeholder = 0.1 # Placeholder
+            social_media_sentiment_input = None # Explicitly None as it's a placeholder
             enhanced_recommendation, enhanced_confidence, enhanced_reason, alerts = enhanced_analysis(
                 ticker_symbol_processed,
                 historical_data,
                 technical_indicators,
                 company_fundamentals,
                 overall_news_sentiment,
-                social_media_sentiment_placeholder,
+                social_media_sentiment_input,
                 combined_news_titles
             )
             st.markdown("<h3 style='color: #4682B4;'>✨ Enhanced Analysis</h3>", unsafe_allow_html=True) # Styled subheader
@@ -301,34 +304,39 @@ if st.button("Analyze Stock"):
             else:
                 st.write("No specific alerts.")
 
-            # Financial Event Analysis Example
-            # Only show this section if there's some news (live or sample) to analyze
-            _news_item_for_event_analysis_internal = combined_news_titles[0] if combined_news_titles else None
-            _is_sample_news_internal = False
+            # Financial Event Impact Analysis
+            st.markdown("---") # Visual separator
+            st.markdown("<h3 style='color: #4682B4;'>📰 Financial Event Impact Analysis</h3>", unsafe_allow_html=True)
 
-            if not _news_item_for_event_analysis_internal:
-                _news_item_for_event_analysis_internal = f"""
+            news_item_for_event_analysis = ""
+            is_sample_news_for_event_analysis = False
+
+            if combined_news_titles:
+                news_item_for_event_analysis = combined_news_titles[0] # Use the first actual news title
+            else:
+                # No actual news titles were fetched, but stock data was successfully retrieved.
+                # Provide a sample news snippet for event analysis demonstration.
+                news_item_for_event_analysis = (
+                    f"Market analysts are closely watching {ticker_symbol_processed} following recent sector-wide "
+                    f"news. Potential earnings announcements or product innovations could be catalysts. "
+                    f"Investors also monitor regulatory guidelines and dividend policies."
+                )
+                if not historical_data.empty: # Only show sample if stock data was fetched
+                    news_item_for_event_analysis = f"""
                     {ticker_symbol_processed} reported mixed Q2 results. While revenue saw a slight increase,
                     net profit declined due to rising operational costs. The company announced a
                     new strategic partnership aimed at expanding into new markets and is also
                     exploring cost-cutting measures.
                     """
-                _is_sample_news_internal = True
+                    is_sample_news_for_event_analysis = True
             
-            if _news_item_for_event_analysis_internal and _news_item_for_event_analysis_internal.strip():
-                st.markdown("---") # Visual separator
-                st.markdown("<h3 style='color: #4682B4;'>📰 Financial Event Impact Analysis</h3>", unsafe_allow_html=True) # Styled subheader
-                if _is_sample_news_internal:
+            if news_item_for_event_analysis.strip(): # Ensure there's content to analyze
+                if is_sample_news_for_event_analysis:
                     st.info("No live news fetched. Displaying event analysis with a sample news snippet.")
-
-                st.markdown(f"**Analyzing News Snippet:** `{_news_item_for_event_analysis_internal}`")
+                st.markdown(f"**Analyzing News Snippet:** `{news_item_for_event_analysis}`")
                 st.caption("Note: Event analysis is based on the news title/snippet. Full article content would provide deeper insights.")
-
-                if _is_sample_news_internal:
-                    st.caption("**This is a sample news snippet for demonstration purposes.**")
-                
-                events = extract_financial_events(_news_item_for_event_analysis_internal)
-                sentiment_for_event = analyze_sentiment(_news_item_for_event_analysis_internal)
+                events = extract_financial_events(news_item_for_event_analysis)
+                sentiment_for_event = analyze_sentiment(news_item_for_event_analysis)
                 impact, event_alerts = assess_impact(events, sentiment_for_event)
                 event_signal = generate_signal(impact)
 
@@ -345,6 +353,8 @@ if st.button("Analyze Stock"):
                     with st.expander("Detailed Event Alerts from this News Item", expanded=False):
                         for alert in event_alerts:
                             st.write(f"• {alert}") # Use bullet points
+            else:
+                st.info("No news item available to perform financial event impact analysis for this stock.")
 
             st.markdown("---") # Visual separator
             # --- KEY ANALYSIS SUMMARY ---
