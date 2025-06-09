@@ -33,10 +33,10 @@ multitasking==0.0.11
 narwhals==1.41.0
 newsapi-python==0.2.7
 nltk==3.9.1
-numpy==2.2.6
+numpy==1.26.3
 openai==1.82.0
-packaging==24.2 
-pandas-ta==0.3.14b0
+packaging==24.2
+pandas-ta==0.3.14b0 # Ensure this specific version
 pandas==2.2.3
 peewee==3.18.1
 pillow==11.2.1
@@ -59,7 +59,6 @@ setuptools==80.8.0
 sgmllib3k==1.0.0
 six==1.17.0
 smmap==5.0.2
-sniffio==1.3.1
 soupsieve==2.7
 streamlit==1.45.1
 tenacity==9.1.2
@@ -73,4 +72,3 @@ tzdata==2025.2
 urllib3==2.4.0
 websockets==15.0.1
 Werkzeug==3.1.3
-yfinance==0.2.61
