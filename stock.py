@@ -60,9 +60,18 @@ except ImportError:
 # export NEWS_API_KEY="your_actual_news_api_key_here"
 # export OPENAI_API_KEY="sk-proj-..."
 # export GNEWS_API_KEY="your_gnews_api_key_here"
-NEWS_API_KEY = os.environ.get("NEWS_API_KEY") # type: ignore
-# OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") # Commented out for consistency, openai_utils.py handles its own
-GNEWS_API_KEY = os.environ.get("GNEWS_API_KEY")
+
+# Attempt to load secrets if running in Streamlit, otherwise use environment variables
+try:
+    import streamlit as st
+    # Check if secrets are loaded and keys exist
+    NEWS_API_KEY = st.secrets.get("NEWS_API_KEY") if hasattr(st, 'secrets') and "NEWS_API_KEY" in st.secrets else os.environ.get("NEWS_API_KEY")
+    GNEWS_API_KEY = st.secrets.get("GNEWS_API_KEY") if hasattr(st, 'secrets') and "GNEWS_API_KEY" in st.secrets else os.environ.get("GNEWS_API_KEY")
+except (ImportError, AttributeError): # AttributeError handles if st.secrets doesn't exist
+    # Fallback to environment variables if streamlit is not available or secrets are not configured
+    NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
+    GNEWS_API_KEY = os.environ.get("GNEWS_API_KEY")
+
 
 # Define the base Google News RSS URL (will be made ticker-specific dynamically)
 BASE_GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"

@@ -29,8 +29,8 @@ except ImportError:
     # Plotting functions will handle pandas-ta (aliased as ta) being None.
 
 # Re-read environment variables inside the app or pass them
-APP_NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
-APP_GNEWS_API_KEY = os.environ.get("GNEWS_API_KEY") # GNews API Key re-added
+APP_NEWS_API_KEY = st.secrets.get("NEWS_API_KEY") if hasattr(st, 'secrets') and "NEWS_API_KEY" in st.secrets else None
+APP_GNEWS_API_KEY = st.secrets.get("GNEWS_API_KEY") if hasattr(st, 'secrets') and "GNEWS_API_KEY" in st.secrets else None
 
 # Note: The newsapi_client used by fetch_news_sentiment_from_newsapi
 # is initialized in stock.py.
