@@ -59,19 +59,17 @@ except ImportError:
 # Set these environment variables in your system's environment (NOT directly in code):
 # export NEWS_API_KEY="your_actual_news_api_key_here"
 # export OPENAI_API_KEY="sk-proj-..."
-# export GNEWS_API_KEY="your_gnews_api_key_here"
+# stock.py will now only read from environment variables if run directly
 
-# Attempt to load secrets if running in Streamlit, otherwise use environment variables
-try:
-    import streamlit as st
-    # Check if secrets are loaded and keys exist
-    NEWS_API_KEY = st.secrets.get("NEWS_API_KEY") if hasattr(st, 'secrets') and "NEWS_API_KEY" in st.secrets else os.environ.get("NEWS_API_KEY")
-    GNEWS_API_KEY = st.secrets.get("GNEWS_API_KEY") if hasattr(st, 'secrets') and "GNEWS_API_KEY" in st.secrets else os.environ.get("GNEWS_API_KEY")
-except (ImportError, AttributeError): # AttributeError handles if st.secrets doesn't exist
-    # Fallback to environment variables if streamlit is not available or secrets are not configured
-    NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
-    GNEWS_API_KEY = os.environ.get("GNEWS_API_KEY")
+# --- END OF THRESHOLDS ---
 
+# Initialize GNews client
+gnews_client = None # Initialize to None
+if GNews: # Check if the GNews library is installed
+    gnews_client = GNews(max_results=20, period='7d')
+    print("GNews client initialized (max_results=20, period=7d).")
+else: # Ensure this 'else' is aligned with the 'if GNews:' above
+    print("Warning: 'gnews' library not found. GNews functionalities will be skipped.")
 
 # Define the base Google News RSS URL (will be made ticker-specific dynamically)
 BASE_GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
@@ -87,37 +85,6 @@ EPS_GROWTH_STRONG_THRESHOLD = 0.1
 EPS_GROWTH_NEGATIVE_THRESHOLD = -0.1
 # --- END OF THRESHOLDS ---
 
-# Initialize NewsApiClient
-newsapi_client = None
-if NEWS_API_KEY:
-    if NewsApiClient:
-        newsapi_client = NewsApiClient(api_key=NEWS_API_KEY)
-        print("NewsAPI client initialized.")
-    else:
-        print("NewsAPI client could not be initialized. 'newsapi-python' library not found.")
-else:
-    print("NEWS_API_KEY environment variable not set. NewsAPI functionalities will be skipped.")
-
-gnews_client = None
-if GNEWS_API_KEY:
-    if GNews:
-        gnews_client = GNews(max_results=20, period='7d')  # Fetch up to 20 articles from the last 7 days
-        print("GNews client initialized (max_results=20, period=7d).")
-    else:
-        print("GNews client could not be initialized. 'gnews' library not found.")
-else:
-    print("GNEWS_API_KEY environment variable not set. GNews functionalities will be skipped for Indian stocks.")
-# Initialize OpenAI (uncomment and install 'openai' if you plan to use it)
-# import openai
-# if OPENAI_API_KEY:
-#     try:
-#         import openai
-#         openai.api_key = OPENAI_API_KEY
-#         print("OpenAI API key loaded.")
-#     except ImportError:
-#         print("OpenAI library not installed. Run 'pip install openai' to use OpenAI functionalities.")
-# else:
-#     print("OPENAI_API_KEY environment variable not set. OpenAI functionalities will be skipped.")
 
 
 # --- TECHNICAL INDICATOR CALCULATIONS ---
@@ -432,22 +399,30 @@ def analyze_sentiment(text: str) -> float:
         return 0.0 # Return neutral sentiment for non-string or empty input
     return TextBlob(text).sentiment.polarity
 
-def fetch_news_sentiment_from_newsapi(ticker_symbol: str) -> tuple[float | None, list[str]]:
+def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[str]]:
     """
     Fetches recent news articles for a given ticker symbol from NewsAPI
     and calculates the average sentiment.
 
-    Args:
-        ticker_symbol (str): The stock ticker symbol.
-
     Returns:
         tuple: (Average sentiment: float | None, List of news titles: list)
     """
-    if not newsapi_client:
-        print("NewsAPI client not initialized. Cannot fetch news from NewsAPI.")
+    if not api_key:
+        print("NewsAPI key not provided. Skipping NewsAPI fetch.")
         return None, []
 
     all_articles = []
+    newsapi_client = None
+    if api_key:
+        if NewsApiClient: # Check if the library was successfully imported
+            newsapi_client = NewsApiClient(api_key=api_key)
+            # print("NewsAPI client initialized for fetch.") # Optional: for debugging # Removed premature return
+        # else: # This else block is implicitly handled by the 'if not newsapi_client' check below
+            # print("'newsapi-python' library not found. Cannot initialize NewsAPI client.") # Already handled by global import warning
+
+    if not newsapi_client: # If client couldn't be initialized (e.g. library missing, or api_key was None)
+        return None, []
+
     try:
         # Fetch news from the last 7 days (free tier usually limits to 30 days history)
         from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
@@ -499,14 +474,14 @@ def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str) -> tuple[flo
     and calculates sentiment. Requires 'feedparser'.
     """
     if feedparser is None:
-        print("Feedparser not available. Cannot fetch RSS news.")
+        # print("Feedparser not available. Cannot fetch RSS news.") # Silenced
         return None, []
 
     relevant_articles = []
     try:
         feed = feedparser.parse(rss_url)
         if not feed.entries:
-            print(f"No entries found in RSS feed: {rss_url}")
+            # print(f"No entries found in RSS feed: {rss_url}") # Silenced
             return None, []
 
         for entry in feed.entries:
@@ -524,20 +499,21 @@ def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str) -> tuple[flo
             if sentiments:
                 avg_sentiment = np.mean(sentiments)
                 news_titles = [entry.get('title', 'No Title') for entry in relevant_articles]
-                print(f"Fetched {len(news_titles)} relevant articles from RSS for {ticker_symbol}.")
+                # print(f"Fetched {len(news_titles)} relevant articles from RSS for {ticker_symbol}.") # Silenced
                 return avg_sentiment, news_titles
-        print(f"No relevant news found for {ticker_symbol} in RSS feed.")
+        # print(f"No relevant news found for {ticker_symbol} in RSS feed.") # Silenced
         return None, []
     except Exception as e:
-        print(f"Error fetching RSS news from {rss_url}: {e}")
+        # print(f"Error fetching RSS news from {rss_url}: {e}") # Silenced
         return None, []
 
-def fetch_news_sentiment_from_gnews(ticker_symbol: str) -> tuple[float | None, list[str]]:
+def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[str]]: # type: ignore
     """
     Fetches news for a given ticker symbol from GNews and calculates sentiment.
-    (Stub implementation - requires actual GNews library usage)
-    Args:
         ticker_symbol (str): The stock ticker symbol (often for .NS market).
+        api_key (str | None): The GNews API key (though the gnews library might not strictly require it).
+    # The gnews library (v0.4.1) doesn't strictly require an API key for basic usage,
+    # but we keep the key parameter for consistency or future library versions.
     Returns:
         tuple: (Average sentiment: float | None, List of news titles: list)
     """
@@ -740,7 +716,6 @@ def generate_signal(impact: dict) -> str:
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    # Get ticker symbol from user input
     while True:
         ticker_input = input("Please enter the stock ticker symbol to analyze (e.g., AAPL, GOOG): ")
         if ticker_input.strip():
@@ -779,7 +754,10 @@ if __name__ == "__main__":
 
 
         # 3. Fetch News Sentiment (from NewsAPI and RSS)
-        newsapi_sentiment, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER)
+        # Retrieve API keys from environment for direct script execution
+        env_news_api_key = os.environ.get("NEWS_API_KEY")
+        env_gnews_api_key = os.environ.get("GNEWS_API_KEY")
+        newsapi_sentiment, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key) # Pass key
 
         # Dynamically create ticker-specific RSS URL
         ticker_specific_rss_url = BASE_GOOGLE_NEWS_RSS_URL.format(ticker=TICKER)
@@ -787,6 +765,10 @@ if __name__ == "__main__":
 
         # Combine sentiments and titles
         combined_sentiments = []
+        # Fetch GNews sentiment (Pass key, though library might not use it)
+        gnews_sentiment, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key)
+
+
         combined_news_titles = []
 
         if newsapi_sentiment is not None:
@@ -795,6 +777,10 @@ if __name__ == "__main__":
         if rss_sentiment is not None:
             combined_sentiments.append(rss_sentiment)
             combined_news_titles.extend(rss_titles)
+        if gnews_sentiment is not None: # Add GNews results
+            combined_sentiments.append(gnews_sentiment)
+            combined_news_titles.extend(rss_titles)
+            combined_news_titles.extend(gnews_titles) # Correctly add GNews titles
 
         overall_news_sentiment = None
         if combined_sentiments:

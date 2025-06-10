@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import sys # Add this import
-
 st.set_page_config(
     page_title="MarketLens - Stock Analysis",
     page_icon="🔍",  # Lens emoji or 📈
@@ -11,7 +10,7 @@ st.set_page_config(
 
 # Import all your functions from stock.py
 # Assuming stock.py is in the same directory or accessible via PYTHONPATH
-from stock import (
+from stock import ( # Removed global client imports
     get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
     fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis, extract_financial_events,
     assess_impact, generate_signal
@@ -29,13 +28,11 @@ except ImportError:
     # Plotting functions will handle pandas-ta (aliased as ta) being None.
 
 # Re-read environment variables inside the app or pass them
-APP_NEWS_API_KEY = st.secrets.get("NEWS_API_KEY") if hasattr(st, 'secrets') and "NEWS_API_KEY" in st.secrets else None
-APP_GNEWS_API_KEY = st.secrets.get("GNEWS_API_KEY") if hasattr(st, 'secrets') and "GNEWS_API_KEY" in st.secrets else None
+# Use st.secrets first, fallback to environment variables
+APP_NEWS_API_KEY = st.secrets.get("NEWS_API_KEY", os.environ.get("NEWS_API_KEY"))
+APP_GNEWS_API_KEY = st.secrets.get("GNEWS_API_KEY", os.environ.get("GNEWS_API_KEY"))
 
-# Note: The newsapi_client used by fetch_news_sentiment_from_newsapi
-# is initialized in stock.py.
-
-    # Print the Python executable Streamlit is using
+# Print the Python executable Streamlit is using (for debugging environment)
 st.write(f"Streamlit is using Python: {sys.executable}")
     
 # --- Plotting Functions ---
@@ -73,7 +70,7 @@ def create_price_volume_chart(df_hist, ticker):
                   row=2, col=1)
 
     fig.update_layout(
-        title_text=f'{ticker} Price, SMAs, and Volume',
+        title_text=f'{ticker} - Price, SMAs, and Volume',
         xaxis_title='Date',
         yaxis_title='Price (USD)',
         xaxis_rangeslider_visible=False,
@@ -96,7 +93,7 @@ def create_rsi_chart(df_hist, ticker):
         fig.add_trace(go.Scatter(x=rsi_series.index, y=rsi_series, mode='lines', name='RSI'))
         fig.add_hline(y=70, line_dash="dash", line_color="#EF5350", annotation_text="Overbought (70)", annotation_position="bottom right") # Specific Red
         fig.add_hline(y=30, line_dash="dash", line_color="#66BB6A", annotation_text="Oversold (30)", annotation_position="bottom right") # Specific Green
-        fig.update_layout(title_text=f'{ticker} Relative Strength Index (RSI)',
+        fig.update_layout(title_text=f'{ticker} - Relative Strength Index (RSI)',
                           xaxis_title='Date', yaxis_title='RSI', yaxis_range=[0,100])
         return fig
     except Exception as e:
@@ -134,7 +131,7 @@ def create_macd_chart(df_hist, ticker):
             colors = ['#26A69A' if val >= 0 else '#EF5350' for val in macd_hist_values]
             fig.add_trace(go.Bar(x=macd_hist_values.index, y=macd_hist_values, name='MACD Histogram', marker_color=colors))
 
-        fig.update_layout(title_text=f'{ticker} MACD', xaxis_title='Date', yaxis_title='MACD Value')
+        fig.update_layout(title_text=f'{ticker} - MACD', xaxis_title='Date', yaxis_title='MACD Value')
         return fig
     except Exception as e:
         st.error(f"Error creating MACD chart with pandas-ta: {e}")
@@ -175,7 +172,7 @@ if st.button("Analyze Stock"):
         historical_data, current_price, company_fundamentals, error = get_stock_data(ticker_symbol_processed)
 
         if error:
-            st.error(f"Error fetching data: {error}")
+            st.error(f"Error fetching data for {ticker_symbol_processed}: {error}")
         elif historical_data is None or historical_data.empty:
             st.warning(f"Could not retrieve sufficient data for {ticker_symbol_processed}.")
         else:
@@ -183,7 +180,7 @@ if st.button("Analyze Stock"):
             st.metric(label="Current Price", value=f"${current_price:.2f}" if current_price is not None else "N/A")
 
             # --- PLOTTING CHARTS ---
-            st.markdown("---") # Visual separator
+            st.markdown("---")  # Visual separator
             st.markdown("<h3 style='color: #4682B4;'>📊 Price Chart & Volume</h3>", unsafe_allow_html=True)
             fig_price_volume = create_price_volume_chart(historical_data, ticker_symbol_processed)
             if fig_price_volume:
@@ -225,20 +222,22 @@ if st.button("Analyze Stock"):
                     st.write("Technical indicators skipped (pandas-ta not available or insufficient data).")
 
 
-            # 3. Fetch News Sentiment (from NewsAPI and RSS)
+            # 3. Fetch News Sentiment (from NewsAPI and GNews)
             # Initialize newsapi_client for Streamlit app context if not already done in stock.py
             newsapi_sentiment, newsapi_titles = None, [] # Ensure they are defined
-            if APP_NEWS_API_KEY: # Only attempt if key is present
-                newsapi_sentiment, newsapi_titles = fetch_news_sentiment_from_newsapi(ticker_symbol_processed)
-            # else:
+            # Fetch NewsAPI sentiment if key is available
+            if APP_NEWS_API_KEY: # Check if the NewsAPI key is configured
+                newsapi_sentiment, newsapi_titles = fetch_news_sentiment_from_newsapi(ticker_symbol_processed, APP_NEWS_API_KEY)
+            # else: # Commented out as the sidebar already indicates missing key.
                 # Sidebar already indicates missing key. No prominent warning in main UI.
 
             gnews_sentiment, gnews_titles = None, [] # Ensure defined
             # Attempt GNews if key is present (useful for broader coverage or specific regions like India)
-            if APP_GNEWS_API_KEY:
+            # Check if the GNews API key is configured
+            if APP_GNEWS_API_KEY: 
                 st.write(f"Attempting to fetch news from GNews for {ticker_symbol_processed}...") # User feedback
-                gnews_sentiment, gnews_titles = fetch_news_sentiment_from_gnews(ticker_symbol_processed)
-            # else:
+                gnews_sentiment, gnews_titles = fetch_news_sentiment_from_gnews(ticker_symbol_processed, APP_GNEWS_API_KEY) # Pass the API key
+            # else: # Commented out as the sidebar already indicates missing key.
                 # Sidebar already indicates missing key.
 
             combined_sentiments = []
@@ -250,11 +249,11 @@ if st.button("Analyze Stock"):
             if gnews_sentiment is not None:
                 combined_sentiments.append(gnews_sentiment)
                 combined_news_titles.extend(gnews_titles)
-            
+
             # De-duplicate news titles
             if combined_news_titles:
                 seen_titles = set()
-                unique_titles = [title for title in combined_news_titles if not (title in seen_titles or seen_titles.add(title))]
+                unique_titles = list(dict.fromkeys(combined_news_titles)) # More efficient deduplication
                 combined_news_titles = unique_titles
 
             overall_news_sentiment = None
@@ -266,12 +265,13 @@ if st.button("Analyze Stock"):
                 if overall_news_sentiment is not None:
                     st.write(f"**Overall News Sentiment:** {overall_news_sentiment:.2f}")
                     st.write("Recent News Titles (sample):")
-                    # Display unique titles
-                    for i, title in enumerate(list(set(combined_news_titles))[:5]):
+                    # Display more unique titles (up to 10)
+                    for i, title in enumerate(combined_news_titles[:10]):
                         st.write(f"• {title}") # Use bullet points
                 # If after all sources, there's still no overall sentiment
                 if overall_news_sentiment is None:
                     st.write("No news sentiment could be determined from available sources.")
+                st.caption("Sentiment is based on news titles and descriptions.")
 
             # DeepSeek News Summary section removed
             st.markdown("---") # Visual separator
@@ -330,13 +330,13 @@ if st.button("Analyze Stock"):
                     """
                     is_sample_news_for_event_analysis = True
             
-            if news_item_for_event_analysis.strip(): # Ensure there's content to analyze
+            if news_item_for_event_analysis.strip():  # Ensure there's content to analyze
                 if is_sample_news_for_event_analysis:
                     st.info("No live news fetched. Displaying event analysis with a sample news snippet.")
                 st.markdown(f"**Analyzing News Snippet:** `{news_item_for_event_analysis}`")
                 st.caption("Note: Event analysis is based on the news title/snippet. Full article content would provide deeper insights.")
                 events = extract_financial_events(news_item_for_event_analysis)
-                sentiment_for_event = analyze_sentiment(news_item_for_event_analysis)
+                sentiment_for_event = analyze_sentiment(news_item_for_event_analysis) # Corrected - missing parenthesis
                 impact, event_alerts = assess_impact(events, sentiment_for_event)
                 event_signal = generate_signal(impact)
 
@@ -363,8 +363,8 @@ if st.button("Analyze Stock"):
                 st.metric(label="Final Recommendation", value=enhanced_recommendation)
                 st.metric(label="Confidence Level", value=f"{enhanced_confidence}%")
                 st.markdown("**Primary Reasons:**") # Use markdown for consistency
-                st.write(enhanced_reason)
+                st.write(enhanced_reason) # Write the reason
                 if alerts: # Display critical alerts from enhanced analysis again for emphasis
                     st.warning("Important Alerts to Consider (from Enhanced Analysis):")
                     for alert in alerts:
-                        st.write(f"  - {alert}")
+                        st.write(f" - {alert}")
