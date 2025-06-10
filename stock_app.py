@@ -31,9 +31,6 @@ except ImportError:
 # Use st.secrets first, fallback to environment variables
 APP_NEWS_API_KEY = st.secrets.get("NEWS_API_KEY", os.environ.get("NEWS_API_KEY"))
 APP_GNEWS_API_KEY = st.secrets.get("GNEWS_API_KEY", os.environ.get("GNEWS_API_KEY"))
-
-# Print the Python executable Streamlit is using (for debugging environment)
-st.write(f"Streamlit is using Python: {sys.executable}")
     
 # --- Plotting Functions ---
 def create_price_volume_chart(df_hist, ticker):
