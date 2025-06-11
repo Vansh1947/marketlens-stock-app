@@ -352,30 +352,6 @@ if st.button("Analyze Stock"):
                             st.write(f"• {alert}") # Use bullet points
             else:
                 st.info("No news item available to perform financial event impact analysis for this stock.")
-            
-            st.markdown("---") # Visual separator
-            # --- Signal-Based Predictive Suggestions ---
-            st.markdown("<h3 style='color: #4682B4;'>🚦 Signal-Based Predictive Suggestions</h3>", unsafe_allow_html=True)
-            with st.expander("Show Predictive Signals", expanded=True):
-                rsi_value = technical_indicators.get('RSI')
-                macd_hist_value = technical_indicators.get('MACD_Hist')
-
-                if rsi_value is not None and macd_hist_value is not None:
-                    if rsi_value < 30 and macd_hist_value > 0:
-                        st.success("🟢 **Buy Signal:** Stock appears oversold (RSI < 30) with rising momentum (MACD Histogram > 0).")
-                        st.caption(f"Details: RSI = {rsi_value:.2f}, MACD Histogram = {macd_hist_value:.2f}")
-                    elif rsi_value > 70 and macd_hist_value < 0:
-                        st.warning("🔴 **Sell Signal:** Stock appears overbought (RSI > 70) with weakening momentum (MACD Histogram < 0).")
-                        st.caption(f"Details: RSI = {rsi_value:.2f}, MACD Histogram = {macd_hist_value:.2f}")
-                    else:
-                        st.info("⚠️ **Hold/Neutral:** No strong buy or sell signal based on the RSI & MACD Histogram combination.")
-                        st.caption(f"Details: RSI = {rsi_value:.2f}, MACD Histogram = {macd_hist_value:.2f}")
-                elif rsi_value is None and macd_hist_value is None:
-                    st.info("Predictive signals require RSI and MACD Histogram data, which is currently unavailable (possibly insufficient data or pandas-ta issue).")
-                elif rsi_value is None:
-                    st.info("Predictive signals require RSI data, which is currently unavailable.")
-                elif macd_hist_value is None:
-                    st.info("Predictive signals require MACD Histogram data, which is currently unavailable.")
 
             st.markdown("---") # Visual separator
             # --- KEY ANALYSIS SUMMARY ---
