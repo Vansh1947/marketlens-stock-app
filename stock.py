@@ -292,9 +292,12 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
             sell_signals += 1
             reasons.append(f"RSI ({rsi_val:.2f}) overbought")
             confidence_score -= 10 # Negative impact for overbought
-        elif RSI_BULLISH_NEUTRAL_THRESHOLD < rsi_val < RSI_OVERBOUGHT_THRESHOLD: # RSI Bullish Zone (55 < RSI < 70)
+        elif RSI_BULLISH_NEUTRAL_THRESHOLD <= rsi_val <= 65: # Moderate Bullish RSI (55-65)
+            confidence_score += 5 # Per GOOG example
+            reasons.append(f"RSI ({rsi_val:.2f}) indicates moderate bullish strength")
+        elif rsi_val > 65 and rsi_val < RSI_OVERBOUGHT_THRESHOLD: # Still bullish but closer to overbought (65-70)
             confidence_score += 10 # Positive for bullish neutral
-            reasons.append(f"RSI ({rsi_val:.2f}) in bullish neutral zone")
+            reasons.append(f"RSI ({rsi_val:.2f}) in bullish zone, approaching overbought")
         else:
             hold_signals += 1
             reasons.append(f"RSI ({rsi_val:.2f}) neutral")
@@ -302,6 +305,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         if RSI_BULLISH_NEUTRAL_THRESHOLD < rsi_val < RSI_OVERBOUGHT_THRESHOLD: # RSI Bullish Zone (55 < RSI < 70)
             confidence_score += 10
             # Reason already added above if in this zone
+            pass # Covered by the more granular RSI checks above
     macd_val = technical_indicators.get('MACD')
     macd_signal_val = technical_indicators.get('MACD_Signal')
     macd_bullish_crossover = False
@@ -309,7 +313,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         if macd_val > macd_signal_val:
             buy_signals += 1
             reasons.append("MACD bullish crossover")
-            confidence_score += 20
+            confidence_score += 10 # Adjusted per GOOG example (was +20)
             macd_bullish_crossover = True
         elif macd_val < macd_signal_val:
             sell_signals += 1
@@ -348,9 +352,11 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
     # Company Fundamentals
     pe_ratio = None
     eps_growth = None
+    sector = None
     if company_fundamentals: 
         pe_ratio = company_fundamentals.get('trailingPE')
         eps_growth = company_fundamentals.get('earningsGrowth')
+        sector = company_fundamentals.get('sector') # Attempt to get sector
     # The rest of the logic handles pe_ratio and eps_growth being None gracefully
 
 
@@ -358,9 +364,14 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD:
             buy_signals += 1
             reasons.append(f"Low P/E Ratio ({pe_ratio:.2f})")
+            confidence_score += 5 # General low P/E is good
         elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
             # sell_signals += 1 # High P/E for growth stock might be normal
             reasons.append(f"High P/E Ratio ({pe_ratio:.2f})")
+        # Contextual P/E for Tech sector
+        if sector and "technology" in sector.lower() and pe_ratio < 20:
+            reasons.append(f"P/E ({pe_ratio:.2f}) is relatively low for Technology sector.")
+            confidence_score += 5 # Undervalued relative to tech peers (per GOOG example)
         else:
             hold_signals += 1
             reasons.append(f"Neutral P/E Ratio ({pe_ratio:.2f})")
@@ -372,7 +383,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
             buy_signals += 1
             reasons.append(f"Strong EPS Growth ({eps_growth:.2%})")
-            confidence_score += 15
+            confidence_score += 10 # Adjusted per GOOG example (was +15)
             strong_eps_growth = True
         elif eps_growth < EPS_GROWTH_NEGATIVE_THRESHOLD:
             sell_signals += 1
@@ -433,7 +444,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         else:
             sell_signals += 1
             reasons.append("50-day SMA below 200-day SMA (Death Cross)")
-            confidence_score -= 10 # Apply Death Cross penalty (per SMCI example)
+            confidence_score -= 5 # Adjusted per GOOG example (was -10)
 
     # Social Media Sentiment (Placeholder - requires external integration)
     if social_media_sentiment is not None:
