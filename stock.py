@@ -65,7 +65,7 @@ except ImportError:
 
 # Initialize GNews client
 gnews_client = None # Initialize to None
-if GNews: # Check if the GNews library is installed
+if GNews:  # Check if the GNews library is installed
     gnews_client = GNews(max_results=20, period='7d')
     print("GNews client initialized (max_results=20, period=7d).")
 else: # Ensure this 'else' is aligned with the 'if GNews:' above
@@ -77,11 +77,14 @@ BASE_GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search?q={ticker}+stock+
 # --- ANALYSIS THRESHOLDS (Constants for clarity and easy modification) ---
 RSI_OVERSOLD_THRESHOLD = 30
 RSI_OVERBOUGHT_THRESHOLD = 70
+RSI_BULLISH_NEUTRAL_THRESHOLD = 55 # For growth stock check
 PE_RATIO_UNDERVALUED_THRESHOLD = 15
 PE_RATIO_OVERVALUED_THRESHOLD = 30
-POSITIVE_SENTIMENT_THRESHOLD = 0.2
-NEGATIVE_SENTIMENT_THRESHOLD = -0.2
-EPS_GROWTH_STRONG_THRESHOLD = 0.1
+POSITIVE_SENTIMENT_THRESHOLD = 0.25 # Renamed from VERY_POSITIVE_SENTIMENT_THRESHOLD for consistency
+SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD = 0.10
+NEUTRAL_SENTIMENT_LOWER_BOUND = -0.10 # If sentiment is >= this and < SLIGHTLY_POSITIVE, it's Neutral
+NEGATIVE_SENTIMENT_THRESHOLD = -0.10 # Anything below this is considered Negative
+EPS_GROWTH_STRONG_THRESHOLD = 0.30 # Adjusted to 30% as per suggestion
 EPS_GROWTH_NEGATIVE_THRESHOLD = -0.1
 # --- END OF THRESHOLDS ---
 
@@ -98,6 +101,9 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
     Returns:
         dict: A dictionary containing calculated technical indicators.
     """
+    if len(historical_data) < 5:
+        print("Insufficient data for calculating technical indicators. Returning empty dict.")
+        return {}
     if ta is None:
         return {}
 
@@ -165,6 +171,7 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
     sell_signals = 0
     hold_signals = 0
     reasons = []
+    confidence_score = 0 # For dynamic confidence
 
     # SMA Crossover
     sma_5 = technical_indicators.get('SMA_5')
@@ -173,12 +180,15 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
         if sma_5 > sma_20:
             buy_signals += 1
             reasons.append("5-day SMA above 20-day SMA (Bullish Crossover)")
+            confidence_score += 20
         elif sma_5 < sma_20:
             sell_signals += 1
             reasons.append("5-day SMA below 20-day SMA (Bearish Crossover)")
+            confidence_score += 15 # Sell signals also contribute to confidence in the signal
         else:
             hold_signals += 1
             reasons.append("5-day and 20-day SMAs are close (Neutral Crossover)")
+            confidence_score += 5
 
     # RSI
     rsi_value = technical_indicators.get('RSI')
@@ -186,12 +196,15 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
         if rsi_value < RSI_OVERSOLD_THRESHOLD:
             buy_signals += 1
             reasons.append(f"RSI ({rsi_value:.2f}) indicates oversold condition")
+            confidence_score += 20
         elif rsi_value > RSI_OVERBOUGHT_THRESHOLD:
             sell_signals += 1
             reasons.append(f"RSI ({rsi_value:.2f}) indicates overbought condition")
+            confidence_score += 20
         else:
             hold_signals += 1
             reasons.append(f"RSI ({rsi_value:.2f}) is neutral")
+            confidence_score += 10
 
     # MACD
     macd_value = technical_indicators.get('MACD')
@@ -200,38 +213,47 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
         if macd_value > macd_signal_value:
             buy_signals += 1
             reasons.append("MACD above MACD Signal (Bullish MACD Crossover)")
+            confidence_score += 25
         elif macd_value < macd_signal_value:
             sell_signals += 1
             reasons.append("MACD below MACD Signal (Bearish MACD Crossover)")
+            confidence_score += 20
         else:
             hold_signals += 1
             reasons.append("MACD and MACD Signal are close (Neutral MACD)")
+            confidence_score += 5
 
     # News Sentiment
     if news_sentiment is not None:
-        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+        if news_sentiment >= POSITIVE_SENTIMENT_THRESHOLD:
             buy_signals += 1
             reasons.append(f"Positive news sentiment ({news_sentiment:.2f})")
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+            confidence_score += 20
+        elif news_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD:
+            buy_signals += 0.5 # Fractional signal, or adjust confidence
+            reasons.append(f"Slightly positive news sentiment ({news_sentiment:.2f})")
+            confidence_score += 10
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # Using the new NEGATIVE_SENTIMENT_THRESHOLD
             sell_signals += 1
             reasons.append(f"Negative news sentiment ({news_sentiment:.2f})")
-        else:
+            confidence_score += 15
+        else: # Neutral
             hold_signals += 1
             reasons.append(f"Neutral news sentiment ({news_sentiment:.2f})")
+            confidence_score += 5
 
     total_signals = buy_signals + sell_signals + hold_signals
     if total_signals == 0: # No valid indicators to base a decision on
         return "Hold", 50, "No conclusive signals from available data."
 
+    final_confidence = max(0, min(int(confidence_score), 100)) # Cap confidence
+
     if buy_signals > sell_signals and buy_signals >= hold_signals:
-        confidence = min(100, int(buy_signals / total_signals * 100))
-        return "Buy", confidence, "Strong buy signals: " + ", ".join(reasons)
+        return "Buy", final_confidence, "Primary signals suggest Buy: " + "; ".join(reasons)
     elif sell_signals > buy_signals and sell_signals >= hold_signals:
-        confidence = min(100, int(sell_signals / total_signals * 100))
-        return "Sell", confidence, "Strong sell signals: " + ", ".join(reasons)
+        return "Sell", final_confidence, "Primary signals suggest Sell: " + "; ".join(reasons)
     else:
-        confidence = min(100, int(hold_signals / total_signals * 100))
-        return "Hold", confidence, "Mixed signals: " + ", ".join(reasons)
+        return "Hold", final_confidence, "Mixed or neutral signals: " + "; ".join(reasons)
 
 # --- ADVANCED ANALYSIS ---
 def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technical_indicators: dict,
@@ -257,6 +279,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
     hold_signals = 0
     alerts = []
     reasons = []
+    confidence_score = 0
 
     # Technical Indicators
     rsi_val = technical_indicators.get('RSI')
@@ -264,40 +287,62 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         if rsi_val < RSI_OVERSOLD_THRESHOLD:
             buy_signals += 1
             reasons.append(f"RSI ({rsi_val:.2f}) oversold")
+            # confidence_score += 10 # Handled by RSI Bullish Zone below for buy
         elif rsi_val > RSI_OVERBOUGHT_THRESHOLD:
             sell_signals += 1
             reasons.append(f"RSI ({rsi_val:.2f}) overbought")
+            confidence_score -= 10 # Negative impact for overbought
         else:
             hold_signals += 1
             reasons.append(f"RSI ({rsi_val:.2f}) neutral")
+        
+        if RSI_BULLISH_NEUTRAL_THRESHOLD < rsi_val < RSI_OVERBOUGHT_THRESHOLD: # RSI Bullish Zone (55 < RSI < 70)
+            confidence_score += 10
+            reasons.append(f"RSI ({rsi_val:.2f}) in bullish neutral zone")
 
     macd_val = technical_indicators.get('MACD')
     macd_signal_val = technical_indicators.get('MACD_Signal')
+    macd_bullish_crossover = False
     if macd_val is not None and macd_signal_val is not None:
         if macd_val > macd_signal_val:
             buy_signals += 1
             reasons.append("MACD bullish crossover")
+            confidence_score += 20
+            macd_bullish_crossover = True
         elif macd_val < macd_signal_val:
             sell_signals += 1
             reasons.append("MACD bearish crossover")
+            confidence_score -= 15
         else:
             hold_signals += 1
             reasons.append("MACD neutral")
 
+    # SMA5 vs SMA20
+    sma_5_val = technical_indicators.get('SMA_5') # Assuming SMA_5 is calculated and available
+    sma_20_val = technical_indicators.get('SMA_20')
+    if sma_5_val is not None and sma_20_val is not None:
+        if sma_5_val > sma_20_val:
+            buy_signals +=1 # Already part of buy_signals logic
+            reasons.append("SMA_5 > SMA_20 (Short-term bullish)")
+            confidence_score +=15
+
     sma_50_val = technical_indicators.get('SMA_50')
     sma_200_val = technical_indicators.get('SMA_200')
+    death_cross_active = False
     if sma_50_val is not None and sma_200_val is not None:
         if sma_50_val > sma_200_val:
             buy_signals += 1
             reasons.append("50-day SMA above 200-day SMA (Golden Cross)")
+            confidence_score += 10 # Golden cross is positive
         else:
-            sell_signals += 1
-            reasons.append("50-day SMA below 200-day SMA (Death Cross)")
+            death_cross_active = True # Potential Death Cross
+            # sell_signals += 1 # We will handle its impact conditionally
+            # reasons.append("50-day SMA below 200-day SMA (Death Cross)") # Add reason later if applied
 
     # Company Fundamentals
     pe_ratio = None
     eps_growth = None
-    if company_fundamentals: # Check if company_fundamentals is not None and not empty
+    if company_fundamentals: 
         pe_ratio = company_fundamentals.get('trailingPE')
         eps_growth = company_fundamentals.get('earningsGrowth')
     # The rest of the logic handles pe_ratio and eps_growth being None gracefully
@@ -308,7 +353,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
             buy_signals += 1
             reasons.append(f"Low P/E Ratio ({pe_ratio:.2f})")
         elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
-            sell_signals += 1
+            # sell_signals += 1 # High P/E for growth stock might be normal
             reasons.append(f"High P/E Ratio ({pe_ratio:.2f})")
         else:
             hold_signals += 1
@@ -316,44 +361,80 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
     else:
         reasons.append("P/E Ratio not available or infinite.")
 
-
+    strong_eps_growth = False
     if eps_growth is not None:
         if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
             buy_signals += 1
             reasons.append(f"Strong EPS Growth ({eps_growth:.2%})")
+            confidence_score += 15
+            strong_eps_growth = True
         elif eps_growth < EPS_GROWTH_NEGATIVE_THRESHOLD:
             sell_signals += 1
             reasons.append(f"Negative EPS Growth ({eps_growth:.2%})")
+            confidence_score -= 10
         else:
             hold_signals += 1
             reasons.append(f"Neutral EPS Growth ({eps_growth:.2%})")
     else:
         reasons.append("EPS Growth not available.")
 
+    news_is_neutral_or_positive = False
     # News Sentiment
     if news_sentiment is not None:
-        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+        if news_sentiment >= POSITIVE_SENTIMENT_THRESHOLD: # >= 0.25
             buy_signals += 1
             reasons.append(f"Positive news sentiment ({news_sentiment:.2f})")
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+            confidence_score += 15 # Stronger positive sentiment
+            news_is_neutral_or_positive = True
+        elif news_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD: # >= 0.10
+            buy_signals += 0.5 # Or consider it a weaker buy signal
+            reasons.append(f"Slightly positive news sentiment ({news_sentiment:.2f})")
+            confidence_score += 10
+            news_is_neutral_or_positive = True
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < -0.10
             sell_signals += 1
             reasons.append(f"Negative news sentiment ({news_sentiment:.2f})")
-        else:
+            confidence_score -= 10
+        else: # Neutral (-0.10 <= sentiment < 0.10)
             hold_signals += 1
             reasons.append(f"Neutral news sentiment ({news_sentiment:.2f})")
+            news_is_neutral_or_positive = True # Neutral is also counted for deprioritizing death cross
     else:
         reasons.append("News sentiment not available.")
 
+    # Deprioritize Death Cross for growth stocks
+    if death_cross_active:
+        # Conditions to deprioritize: RSI > 55, MACD bullish, News Neutral/Positive, Strong EPS Growth
+        deprioritize = (
+            (rsi_val is not None and rsi_val > RSI_BULLISH_NEUTRAL_THRESHOLD) and
+            macd_bullish_crossover and
+            news_is_neutral_or_positive and
+            strong_eps_growth
+        )
+        if deprioritize:
+            reasons.append("Death Cross observed but deprioritized due to strong growth signals.")
+            # Do not add sell_signal for death cross, or reduce its negative confidence impact
+            confidence_score += 5 # Offset some potential negativity or just don't subtract
+        else:
+            sell_signals += 1
+            reasons.append("50-day SMA below 200-day SMA (Death Cross)")
+            confidence_score -= 10 # Apply Death Cross penalty
+
     # Social Media Sentiment (Placeholder - requires external integration)
     if social_media_sentiment is not None:
-        if social_media_sentiment > POSITIVE_SENTIMENT_THRESHOLD:
-            buy_signals += 1
+        # Using the new sentiment scale for consistency
+        if social_media_sentiment >= POSITIVE_SENTIMENT_THRESHOLD:
+            buy_signals += 0.5 # Social media might be weighted less
             reasons.append(f"Positive social media sentiment ({social_media_sentiment:.2f})")
+            confidence_score += 5
+        elif social_media_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD:
+            reasons.append(f"Slightly positive social media sentiment ({social_media_sentiment:.2f})")
+            confidence_score += 3
         elif social_media_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            sell_signals += 1
+            sell_signals += 0.5
             reasons.append(f"Negative social media sentiment ({social_media_sentiment:.2f})")
-        else:
-            hold_signals += 1
+            confidence_score -= 5
+        else: # Neutral
             reasons.append(f"Neutral social media sentiment ({social_media_sentiment:.2f})")
     else:
         reasons.append("Social media sentiment not available.")
@@ -374,15 +455,14 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
     if total_signals == 0:
         return "Hold", 50, "No conclusive signals from available data.", alerts
 
+    final_confidence = max(0, min(int(confidence_score), 100)) # Cap confidence
+
     if buy_signals > sell_signals and buy_signals >= hold_signals:
-        confidence = min(100, int(buy_signals / total_signals * 100))
-        return "Buy", confidence, "Strong buy signals: " + "; ".join(reasons), alerts
+        return "Buy", final_confidence, "Primary signals suggest Buy: " + "; ".join(reasons), alerts
     elif sell_signals > buy_signals and sell_signals >= hold_signals:
-        confidence = min(100, int(sell_signals / total_signals * 100))
-        return "Sell", confidence, "Strong sell signals: " + "; ".join(reasons), alerts
+        return "Sell", final_confidence, "Primary signals suggest Sell: " + "; ".join(reasons), alerts
     else:
-        confidence = min(100, int(hold_signals / total_signals * 100))
-        return "Hold", confidence, "Mixed signals: " + "; ".join(reasons), alerts
+        return "Hold", final_confidence, "Mixed or neutral signals: " + "; ".join(reasons), alerts
 
 # --- UTILITY FUNCTIONS ---
 def analyze_sentiment(text: str) -> float:
@@ -681,7 +761,7 @@ def get_stock_data(ticker_symbol: str) -> tuple[pd.DataFrame | None, float | Non
             # We might have fundamentals, but no historical data for the specified period
             current_price_from_info = company_fundamentals.get('regularMarketPrice') or company_fundamentals.get('currentPrice')
             # It's unusual to have fundamentals but no historical data for a valid, active ticker over "1y"
-            # but we return what we have.
+            # but we return what we have along with a message.
             return None, current_price_from_info, company_fundamentals, f"No historical data found for '{ticker_symbol}' for the period '1y'. Some fundamental data might be available."
 
         # Ensure 'Close' column exists and has data before accessing iloc[-1]
@@ -781,7 +861,6 @@ if __name__ == "__main__":
             combined_sentiments.append(gnews_sentiment)
             combined_news_titles.extend(rss_titles)
             combined_news_titles.extend(gnews_titles) # Correctly add GNews titles
-
         overall_news_sentiment = None
         if combined_sentiments:
             overall_news_sentiment = np.mean(combined_sentiments)
