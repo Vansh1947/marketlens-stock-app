@@ -84,7 +84,7 @@ POSITIVE_SENTIMENT_THRESHOLD = 0.25 # Renamed from VERY_POSITIVE_SENTIMENT_THRES
 SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD = 0.10
 NEUTRAL_SENTIMENT_LOWER_BOUND = -0.10 # If sentiment is >= this and < SLIGHTLY_POSITIVE, it's Neutral
 NEGATIVE_SENTIMENT_THRESHOLD = -0.10 # Anything below this is considered Negative
-EPS_GROWTH_STRONG_THRESHOLD = 0.30 # Adjusted to 30% as per suggestion
+EPS_GROWTH_STRONG_THRESHOLD = 0.30 
 EPS_GROWTH_NEGATIVE_THRESHOLD = -0.1
 # --- END OF THRESHOLDS ---
 
@@ -244,7 +244,7 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
 
     total_signals = buy_signals + sell_signals + hold_signals
     if total_signals == 0: # No valid indicators to base a decision on
-        return "Hold", 50, "No conclusive signals from available data."
+        return "Hold", 0, "No conclusive signals from available data." # Default confidence to 0 if no signals
 
     final_confidence = max(0, min(int(confidence_score), 100)) # Cap confidence
 
@@ -287,19 +287,21 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         if rsi_val < RSI_OVERSOLD_THRESHOLD:
             buy_signals += 1
             reasons.append(f"RSI ({rsi_val:.2f}) oversold")
-            # confidence_score += 10 # Handled by RSI Bullish Zone below for buy
+            confidence_score += 15 # Oversold is a stronger signal
         elif rsi_val > RSI_OVERBOUGHT_THRESHOLD:
             sell_signals += 1
             reasons.append(f"RSI ({rsi_val:.2f}) overbought")
             confidence_score -= 10 # Negative impact for overbought
+        elif RSI_BULLISH_NEUTRAL_THRESHOLD < rsi_val < RSI_OVERBOUGHT_THRESHOLD: # RSI Bullish Zone (55 < RSI < 70)
+            confidence_score += 10 # Positive for bullish neutral
+            reasons.append(f"RSI ({rsi_val:.2f}) in bullish neutral zone")
         else:
             hold_signals += 1
             reasons.append(f"RSI ({rsi_val:.2f}) neutral")
         
         if RSI_BULLISH_NEUTRAL_THRESHOLD < rsi_val < RSI_OVERBOUGHT_THRESHOLD: # RSI Bullish Zone (55 < RSI < 70)
             confidence_score += 10
-            reasons.append(f"RSI ({rsi_val:.2f}) in bullish neutral zone")
-
+            # Reason already added above if in this zone
     macd_val = technical_indicators.get('MACD')
     macd_signal_val = technical_indicators.get('MACD_Signal')
     macd_bullish_crossover = False
@@ -312,7 +314,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         elif macd_val < macd_signal_val:
             sell_signals += 1
             reasons.append("MACD bearish crossover")
-            confidence_score -= 15
+            confidence_score -= 10 # Per SMCI example
         else:
             hold_signals += 1
             reasons.append("MACD neutral")
@@ -322,9 +324,13 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
     sma_20_val = technical_indicators.get('SMA_20')
     if sma_5_val is not None and sma_20_val is not None:
         if sma_5_val > sma_20_val:
-            buy_signals +=1 # Already part of buy_signals logic
+            buy_signals +=1 
             reasons.append("SMA_5 > SMA_20 (Short-term bullish)")
-            confidence_score +=15
+            confidence_score +=10 # Per SMCI example
+        elif sma_5_val < sma_20_val:
+            sell_signals +=1
+            reasons.append("SMA_5 < SMA_20 (Short-term bearish)")
+            confidence_score -=5 # Short term bearish
 
     sma_50_val = technical_indicators.get('SMA_50')
     sma_200_val = technical_indicators.get('SMA_200')
@@ -333,7 +339,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         if sma_50_val > sma_200_val:
             buy_signals += 1
             reasons.append("50-day SMA above 200-day SMA (Golden Cross)")
-            confidence_score += 10 # Golden cross is positive
+            # confidence_score += 10 # Golden cross is positive, let's see if other factors dominate
         else:
             death_cross_active = True # Potential Death Cross
             # sell_signals += 1 # We will handle its impact conditionally
@@ -371,7 +377,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         elif eps_growth < EPS_GROWTH_NEGATIVE_THRESHOLD:
             sell_signals += 1
             reasons.append(f"Negative EPS Growth ({eps_growth:.2%})")
-            confidence_score -= 10
+            # Confidence adjustment for very negative EPS growth handled below
         else:
             hold_signals += 1
             reasons.append(f"Neutral EPS Growth ({eps_growth:.2%})")
@@ -379,6 +385,15 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         reasons.append("EPS Growth not available.")
 
     news_is_neutral_or_positive = False
+    news_sentiment_value_for_logic = 0.0 # Default to neutral if None
+    if news_sentiment is not None:
+        news_sentiment_value_for_logic = news_sentiment
+
+    # Specific penalty for very negative EPS growth
+    if eps_growth is not None and eps_growth < -0.30: # e.g., less than -30%
+        reasons.append(f"Significant EPS Decline ({eps_growth:.2%}) heavily impacts outlook.")
+        confidence_score -= 25 # Major penalty for sharp EPS drop
+
     # News Sentiment
     if news_sentiment is not None:
         if news_sentiment >= POSITIVE_SENTIMENT_THRESHOLD: # >= 0.25
@@ -389,12 +404,12 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         elif news_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD: # >= 0.10
             buy_signals += 0.5 # Or consider it a weaker buy signal
             reasons.append(f"Slightly positive news sentiment ({news_sentiment:.2f})")
-            confidence_score += 10
+            confidence_score += 5 # Per SMCI example
             news_is_neutral_or_positive = True
         elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < -0.10
             sell_signals += 1
             reasons.append(f"Negative news sentiment ({news_sentiment:.2f})")
-            confidence_score -= 10
+            confidence_score -= 5 # Minor penalty for negative news
         else: # Neutral (-0.10 <= sentiment < 0.10)
             hold_signals += 1
             reasons.append(f"Neutral news sentiment ({news_sentiment:.2f})")
@@ -407,8 +422,8 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         # Conditions to deprioritize: RSI > 55, MACD bullish, News Neutral/Positive, Strong EPS Growth
         deprioritize = (
             (rsi_val is not None and rsi_val > RSI_BULLISH_NEUTRAL_THRESHOLD) and
-            macd_bullish_crossover and
-            news_is_neutral_or_positive and
+            macd_bullish_crossover and # MACD must be bullish
+            (news_sentiment_value_for_logic >= NEUTRAL_SENTIMENT_LOWER_BOUND) and # News is neutral or positive
             strong_eps_growth
         )
         if deprioritize:
@@ -418,7 +433,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         else:
             sell_signals += 1
             reasons.append("50-day SMA below 200-day SMA (Death Cross)")
-            confidence_score -= 10 # Apply Death Cross penalty
+            confidence_score -= 10 # Apply Death Cross penalty (per SMCI example)
 
     # Social Media Sentiment (Placeholder - requires external integration)
     if social_media_sentiment is not None:
@@ -453,16 +468,24 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
 
     total_signals = buy_signals + sell_signals + hold_signals
     if total_signals == 0:
-        return "Hold", 50, "No conclusive signals from available data.", alerts
+        return "Hold", 0, "No conclusive signals from available data.", alerts
 
     final_confidence = max(0, min(int(confidence_score), 100)) # Cap confidence
 
-    if buy_signals > sell_signals and buy_signals >= hold_signals:
-        return "Buy", final_confidence, "Primary signals suggest Buy: " + "; ".join(reasons), alerts
-    elif sell_signals > buy_signals and sell_signals >= hold_signals:
-        return "Sell", final_confidence, "Primary signals suggest Sell: " + "; ".join(reasons), alerts
-    else:
-        return "Hold", final_confidence, "Mixed or neutral signals: " + "; ".join(reasons), alerts
+    # Determine recommendation based on confidence score as suggested
+    if final_confidence >= 60:
+        recommendation = "Buy"
+    elif final_confidence >= 40: # Confidence between 40 and 59
+        recommendation = "Hold"
+    else: # Confidence less than 40
+        recommendation = "Sell"
+    
+    # Override recommendation if strong sell signals dominate despite confidence
+    # This is a heuristic and can be refined.
+    if sell_signals > buy_signals + hold_signals and final_confidence < 50 : # If sell signals are dominant and confidence isn't strongly buy
+        recommendation = "Sell"
+
+    return recommendation, final_confidence, f"Recommendation based on weighted analysis: {'; '.join(reasons)}", alerts
 
 # --- UTILITY FUNCTIONS ---
 def analyze_sentiment(text: str) -> float:
