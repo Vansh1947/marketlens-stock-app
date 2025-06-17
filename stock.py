@@ -839,82 +839,6 @@ def generate_signal(impact: dict) -> str:
     else:
         return 'Hold'
 
-# --- TREND DURATION AND BACKTESTING ---
-def get_current_trend_streak(price_series: pd.Series, lookback: int = 20) -> tuple[str, int]:
-    """
-    Detects the streak (duration) of the most recent continuous price movement (up or down).
-    Args:
-        price_series (pd.Series): Series of close prices, most recent last.
-        lookback (int): Max number of recent periods to check for the streak.
-                        The streak can be at most 'lookback' days long.
-    Returns:
-        tuple[str, int]: ("uptrend", duration) or ("downtrend", duration) or ("neutral", 0)
-    """
-    if price_series is None or len(price_series) < 2:
-        return "neutral", 0
-
-    # Determine the direction of the very last move
-    last_change_is_up = None
-    if price_series.iloc[-1] > price_series.iloc[-2]:
-        last_change_is_up = True
-    elif price_series.iloc[-1] < price_series.iloc[-2]:
-        last_change_is_up = False
-    else:
-        return "neutral", 0 # Last move was flat, so no current streak of change
-
-    trend_duration = 0
-    # Iterate backwards from the most recent comparison.
-    # We check up to 'lookback' number of *days in the streak*.
-    # A streak of 'k' days involves 'k' comparisons.
-    for i in range(1, min(lookback + 1, len(price_series))):
-        current_price = price_series.iloc[-i]
-        previous_price = price_series.iloc[-(i + 1)] # Access element before current_price
-
-        if last_change_is_up: # Checking for uptrend streak
-            if current_price > previous_price:
-                trend_duration += 1
-            else:
-                break # Uptrend streak broken
-        else: # Checking for downtrend streak (last_change_is_up is False)
-            if current_price < previous_price:
-                trend_duration += 1
-            else:
-                break # Downtrend streak broken
-    
-    if trend_duration > 0: # Only return a trend if a streak was actually found
-        return "uptrend" if last_change_is_up else "downtrend", trend_duration
-    return "neutral", 0
-
-
-def simple_backtest(prices: pd.Series, buy_signal_indices: list[int], sell_signal_indices: list[int]) -> float | None:
-    """
-    Performs a simple backtest based on provided buy and sell signal indices.
-    Assumes buy_signal_indices[i] is paired with sell_signal_indices[i] for a trade.
-    Args:
-        prices (pd.Series): Series of historical close prices.
-        buy_signal_indices (list[int]): List of integer indices (iloc positions) where buy signals occurred.
-        sell_signal_indices (list[int]): List of integer indices (iloc positions) where corresponding sell signals occurred.
-    Returns:
-        float | None: Average return percentage, or None if no valid trades.
-    """
-    if prices is None or prices.empty or not buy_signal_indices or not sell_signal_indices or len(buy_signal_indices) != len(sell_signal_indices):
-        return None # Basic validation
-    
-    returns = []
-    for buy_idx, sell_idx in zip(buy_signal_indices, sell_signal_indices):
-        if sell_idx > buy_idx and 0 <= buy_idx < len(prices) and 0 <= sell_idx < len(prices): # Ensure sell is after buy and indices are valid
-            buy_price = prices.iloc[buy_idx]
-            sell_price = prices.iloc[sell_idx]
-            if not pd.isna(buy_price) and not pd.isna(sell_price) and buy_price != 0:
-                profit = (sell_price - buy_price) / buy_price
-                returns.append(profit)
-
-    if not returns:
-        return 0.0 
-    
-    avg_return = np.mean(returns) # Use numpy.mean for robustness with potential NaNs (though filtered)
-    return avg_return * 100 # Return as percentage
-
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
     while True:
@@ -1049,45 +973,5 @@ if __name__ == "__main__":
             print("Event Alerts:")
             for alert in event_alerts:
                 print(f"  - {alert}")
-
-        # 7. Trend Duration
-        if not historical_data.empty:
-            trend_type, trend_days = get_current_trend_streak(historical_data['Close'])
-            print("\n--- Current Trend Duration ---")
-            if trend_days > 0:
-                print(f"Trend Type: {trend_type.capitalize()}, Duration: {trend_days} days")
-            else:
-                print("No clear short-term trend identified.")
-        
-        # 8. Simple Backtest Example
-        print("\n--- Simple Backtest Example (SMA 5/20 Crossover) ---")
-        if len(historical_data) >= 20:
-            prices_series = historical_data['Close']
-            sma5 = prices_series.rolling(window=5).mean()
-            sma20 = prices_series.rolling(window=20).mean()
-            
-            signals_df = pd.DataFrame({'Close': prices_series, 'SMA5': sma5, 'SMA20': sma20}).dropna()
-            
-            paired_buys_idx = []
-            paired_sells_idx = []
-            position = 0 # 0: no position, 1: in a buy position
-
-            for i in range(1, len(signals_df)):
-                original_idx = historical_data.index.get_loc(signals_df.index[i])
-                if signals_df['SMA5'].iloc[i-1] < signals_df['SMA20'].iloc[i-1] and \
-                   signals_df['SMA5'].iloc[i] > signals_df['SMA20'].iloc[i] and position == 0:
-                    paired_buys_idx.append(original_idx)
-                    position = 1
-                elif signals_df['SMA5'].iloc[i-1] > signals_df['SMA20'].iloc[i-1] and \
-                     signals_df['SMA5'].iloc[i] < signals_df['SMA20'].iloc[i] and position == 1:
-                    paired_sells_idx.append(original_idx)
-                    position = 0
-            
-            min_len = min(len(paired_buys_idx), len(paired_sells_idx))
-            avg_return = simple_backtest(prices_series, paired_buys_idx[:min_len], paired_sells_idx[:min_len])
-            if avg_return is not None:
-                print(f"Example Strategy Avg Return: {avg_return:.2f}% over {min_len} trades.")
-            else:
-                print("Could not execute example backtest.")
 
     print("\nScript finished.")
