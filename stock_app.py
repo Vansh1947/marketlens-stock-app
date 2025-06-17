@@ -17,6 +17,7 @@ from stock import ( # Removed global client imports
 )
 import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
+import pandas as pd # Import pandas
 from plotly.subplots import make_subplots
 
 # Conditional pandas_ta import for plotting specific indicators
