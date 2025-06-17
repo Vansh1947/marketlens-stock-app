@@ -12,8 +12,7 @@ st.set_page_config(
 # Assuming stock.py is in the same directory or accessible via PYTHONPATH
 from stock import ( # Removed global client imports
     get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
-    fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis, extract_financial_events, assess_impact, generate_signal,
-    get_current_trend_streak, simple_backtest # Added new functions
+    fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis, extract_financial_events, assess_impact, generate_signal
 )
 import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
@@ -353,66 +352,6 @@ if st.button("Analyze Stock"):
                             st.write(f"• {alert}") # Use bullet points
             else:
                 st.info("No news item available to perform financial event impact analysis for this stock.")
-
-            # Trend Duration
-            st.markdown("---")
-            st.markdown("<h3 style='color: #4682B4;'>⏱️ Current Trend Duration</h3>", unsafe_allow_html=True)
-            with st.expander("Show Trend Duration", expanded=True):
-                if historical_data is not None and not historical_data.empty:
-                    # Use a lookback of around 10-20 days for recent trend
-                    trend_type, trend_days = get_current_trend_streak(historical_data['Close'], lookback=10) 
-                    if trend_days > 0:
-                        if trend_type == "uptrend":
-                            st.success(f"📈 Uptrend detected: Closed higher for {trend_days} consecutive day(s).")
-                        elif trend_type == "downtrend":
-                            st.error(f"📉 Downtrend detected: Closed lower for {trend_days} consecutive day(s).")
-                        st.caption(f"Based on the last {trend_days + 1} closing prices.")
-                    else:
-                        st.info("No clear consecutive up/down trend detected in the most recent daily closes.")
-                else:
-                    st.write("Not enough data for trend duration analysis.")
-
-            # Simple Backtest Section
-            st.markdown("---")
-            st.markdown("<h3 style='color: #4682B4;'>📊 Simple Backtest (Example SMA Crossover Strategy)</h3>", unsafe_allow_html=True)
-            with st.expander("Show Example Backtest Results", expanded=False):
-                if historical_data is not None and len(historical_data) >= 20: # Need at least 20 days for SMA20
-                    prices_series = historical_data['Close']
-                    sma5 = prices_series.rolling(window=5).mean()
-                    sma20 = prices_series.rolling(window=20).mean()
-                    
-                    signals_df = pd.DataFrame({'Close': prices_series, 'SMA5': sma5, 'SMA20': sma20}).dropna()
-                    
-                    paired_buys_idx = []
-                    paired_sells_idx = []
-                    position = 0 # 0: no position, 1: in a buy position
-
-                    for i in range(1, len(signals_df)):
-                        # Get original iloc position
-                        original_idx = historical_data.index.get_loc(signals_df.index[i])
-                        
-                        # Buy signal: SMA5 crosses above SMA20
-                        if signals_df['SMA5'].iloc[i-1] < signals_df['SMA20'].iloc[i-1] and \
-                           signals_df['SMA5'].iloc[i] > signals_df['SMA20'].iloc[i] and position == 0:
-                            paired_buys_idx.append(original_idx)
-                            position = 1
-                        # Sell signal: SMA5 crosses below SMA20
-                        elif signals_df['SMA5'].iloc[i-1] > signals_df['SMA20'].iloc[i-1] and \
-                             signals_df['SMA5'].iloc[i] < signals_df['SMA20'].iloc[i] and position == 1:
-                            paired_sells_idx.append(original_idx)
-                            position = 0
-                            
-                    min_len = min(len(paired_buys_idx), len(paired_sells_idx))
-                    avg_return_pct = simple_backtest(prices_series, paired_buys_idx[:min_len], paired_sells_idx[:min_len])
-                    
-                    if avg_return_pct is not None and min_len > 0:
-                        st.write(f"**Backtest Average Return (SMA 5/20 Crossover):** {avg_return_pct:.2f}%")
-                        st.caption(f"Based on {min_len} simulated trades over the last year.")
-                    else:
-                        st.write("No trades were simulated for the example backtest strategy, or an error occurred.")
-                    st.info("Note: This is a simplified backtest using an SMA 5/20 crossover strategy for demonstration purposes only. Past performance is not indicative of future results. Actual trading involves more complex factors and risks.")
-                else:
-                    st.write("Not enough historical data for the example backtest (needs at least 20 days).")
 
             st.markdown("---") # Visual separator
             # --- KEY ANALYSIS SUMMARY ---
