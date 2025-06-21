@@ -149,6 +149,7 @@ st.sidebar.markdown("---") # Separator in sidebar
 st.sidebar.info("Ensure API keys are set for full functionality.")
 
 # --- Main Title with Styling ---
+
 st.markdown("<h1 style='text-align: center; color: #1E90FF;'>🔍 MarketLens 📈</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #696969;'>Your Clear View on Stock Performance & News</p>", unsafe_allow_html=True)
 st.markdown("---") # Horizontal rule below title
