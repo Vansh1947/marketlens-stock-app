@@ -800,7 +800,7 @@ def get_stock_data(ticker_symbol: str) -> tuple[pd.DataFrame | None, float | Non
             return None, None, None, f"No valid data or fundamentals found for '{ticker_symbol}'. It might be an invalid ticker, delisted, or data is unavailable."
 
         # Fetch 1 year of daily historical data for comprehensive analysis
-        historical_data = stock.history(period="1y")
+        historical_data = stock.history(period="2y")
 
         if historical_data.empty:
             # We might have fundamentals, but no historical data for the specified period

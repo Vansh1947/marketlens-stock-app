@@ -334,7 +334,7 @@ if st.button("Analyze Stock"):
                 st.markdown(f"**Analyzing News Snippet:** `{news_item_for_event_analysis}`")
                 st.caption("Note: Event analysis is based on the news title/snippet. Full article content would provide deeper insights.")
                 events = extract_financial_events(news_item_for_event_analysis)
-                sentiment_for_event = analyze_sentiment(news_item_for_event_analysis) # Corrected - missing parenthesis
+                sentiment_for_event = analyze_sentiment(news_item_for_event_analysis)
                 impact, event_alerts = assess_impact(events, sentiment_for_event)
                 event_signal = generate_signal(impact)
 
