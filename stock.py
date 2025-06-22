@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from textblob import TextBlob
 from datetime import datetime, timedelta
+import math # Added for math.isnan
 
 # Conditional imports for external APIs
 try:
@@ -129,6 +130,30 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
         indicators['RSI'] = rsi_series.iloc[-1]
     else:
         indicators['RSI'] = None
+
+    # Bollinger Bands for forecasting
+    if ta and len(df) >= 20:
+        bbands = df.ta.bbands(length=20, std=2, append=False)
+        if bbands is not None and not bbands.empty:
+            indicators['BB_Upper'] = bbands.iloc[-1].get(f'BBU_20_2.0')
+            indicators['BB_Lower'] = bbands.iloc[-1].get(f'BBL_20_2.0')
+            indicators['BB_Mid'] = bbands.iloc[-1].get(f'BBM_20_2.0')
+        else:
+            indicators['BB_Upper'] = None
+            indicators['BB_Lower'] = None
+            indicators['BB_Mid'] = None
+    else:
+        indicators['BB_Upper'] = None
+        indicators['BB_Lower'] = None
+        indicators['BB_Mid'] = None
+
+    # Average True Range (ATR) for volatility
+    if ta and len(df) >= 14:
+        atr_series = df.ta.atr(length=14)
+        if atr_series is not None and not atr_series.empty:
+            indicators['ATR'] = atr_series.iloc[-1]
+        else:
+            indicators['ATR'] = None
 
     # Moving Average Convergence Divergence (MACD)
     # pandas-ta returns a DataFrame for MACD
@@ -301,11 +326,6 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         else:
             hold_signals += 1
             reasons.append(f"RSI ({rsi_val:.2f}) neutral")
-        
-        if RSI_BULLISH_NEUTRAL_THRESHOLD < rsi_val < RSI_OVERBOUGHT_THRESHOLD: # RSI Bullish Zone (55 < RSI < 70)
-            confidence_score += 10
-            # Reason already added above if in this zone
-            pass # Covered by the more granular RSI checks above
     macd_val = technical_indicators.get('MACD')
     macd_signal_val = technical_indicators.get('MACD_Signal')
     macd_bullish_crossover = False
@@ -524,30 +544,24 @@ def analyze_sentiment(text: str) -> float:
         return 0.0 # Return neutral sentiment for non-string or empty input
     return TextBlob(text).sentiment.polarity
 
-def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[str]]:
+def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[dict]]:
     """
     Fetches recent news articles for a given ticker symbol from NewsAPI
     and calculates the average sentiment.
 
     Returns:
-        tuple: (Average sentiment: float | None, List of news titles: list)
+        tuple: (Average sentiment: float | None, List of news items (dict with title and date): list)
     """
     if not api_key:
         print("NewsAPI key not provided. Skipping NewsAPI fetch.")
         return None, []
-
-    all_articles = []
-    newsapi_client = None
-    if api_key:
-        if NewsApiClient: # Check if the library was successfully imported
-            newsapi_client = NewsApiClient(api_key=api_key)
-            # print("NewsAPI client initialized for fetch.") # Optional: for debugging # Removed premature return
-        # else: # This else block is implicitly handled by the 'if not newsapi_client' check below
-            # print("'newsapi-python' library not found. Cannot initialize NewsAPI client.") # Already handled by global import warning
-
-    if not newsapi_client: # If client couldn't be initialized (e.g. library missing, or api_key was None)
+    
+    if not NewsApiClient: # Check if the library was successfully imported
+        # A warning is already printed at import time.
         return None, []
 
+    newsapi_client = NewsApiClient(api_key=api_key)
+    all_articles = []
     try:
         # Fetch news from the last 7 days (free tier usually limits to 30 days history)
         from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
@@ -566,9 +580,22 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None) -
                           for article in all_articles if article.get('title') or article.get('description')]
             if sentiments:
                 avg_sentiment = np.mean(sentiments)
-                news_titles = [article.get('title', 'No Title') for article in all_articles]
-                print(f"Fetched {len(news_titles)} articles from NewsAPI for {ticker_symbol}.")
-                return avg_sentiment, news_titles
+                news_items = []
+                for article in all_articles:
+                    title = article.get('title', 'No Title')
+                    published_at_str = article.get('publishedAt')
+                    if published_at_str:
+                        try:
+                            # Parse ISO 8601 format and format to YYYY-MM-DD
+                            dt_object = datetime.fromisoformat(published_at_str.replace('Z', '+00:00'))
+                            published_date = dt_object.strftime('%Y-%m-%d')
+                        except ValueError:
+                            published_date = "Unknown Date"
+                    else:
+                        published_date = "Unknown Date"
+                    news_items.append({'title': title, 'date': published_date})
+                print(f"Fetched {len(news_items)} articles from NewsAPI for {ticker_symbol}.")
+                return avg_sentiment, news_items
         print(f"No recent news found for {ticker_symbol} from NewsAPI.")
         return None, []
     except NewsAPIException as e: # type: ignore [misc] # misc because NewsAPIException could be the mock
@@ -593,7 +620,7 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None) -
         print(f"An unexpected error occurred while fetching NewsAPI data for {ticker_symbol}: {e}")
         return None, []
 
-def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str) -> tuple[float | None, list[str]]:
+def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str) -> tuple[float | None, list[dict]]:
     """
     Fetches news from an RSS feed, filters by ticker symbol,
     and calculates sentiment. Requires 'feedparser'.
@@ -623,16 +650,29 @@ def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str) -> tuple[flo
                           for entry in relevant_articles]
             if sentiments:
                 avg_sentiment = np.mean(sentiments)
-                news_titles = [entry.get('title', 'No Title') for entry in relevant_articles]
-                # print(f"Fetched {len(news_titles)} relevant articles from RSS for {ticker_symbol}.") # Silenced
-                return avg_sentiment, news_titles
+                news_items = []
+                for entry in relevant_articles:
+                    title = entry.get('title', 'No Title')
+                    published_date_struct = entry.get('published_parsed')
+                    if published_date_struct:
+                        try:
+                            # Convert time.struct_time to datetime object then format
+                            dt_object = datetime(*published_date_struct[:6])
+                            published_date = dt_object.strftime('%Y-%m-%d')
+                        except (ValueError, TypeError):
+                            published_date = "Unknown Date"
+                    else:
+                        published_date = "Unknown Date"
+                    news_items.append({'title': title, 'date': published_date})
+                # print(f"Fetched {len(news_items)} relevant articles from RSS for {ticker_symbol}.") # Silenced
+                return avg_sentiment, news_items
         # print(f"No relevant news found for {ticker_symbol} in RSS feed.") # Silenced
         return None, []
     except Exception as e:
         # print(f"Error fetching RSS news from {rss_url}: {e}") # Silenced
         return None, []
 
-def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[str]]: # type: ignore
+def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[dict]]: # type: ignore
     """
     Fetches news for a given ticker symbol from GNews and calculates sentiment.
         ticker_symbol (str): The stock ticker symbol (often for .NS market).
@@ -640,7 +680,7 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> 
     # The gnews library (v0.4.1) doesn't strictly require an API key for basic usage,
     # but we keep the key parameter for consistency or future library versions.
     Returns:
-        tuple: (Average sentiment: float | None, List of news titles: list)
+        tuple: (Average sentiment: float | None, List of news items (dict with title and date): list)
     """
     if not gnews_client:
         print("GNews client not initialized. Cannot fetch news from GNews.")
@@ -662,16 +702,29 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> 
                           for item in news_items if item.get('title') or item.get('description') or item.get('text')]
             if sentiments:
                 avg_sentiment = np.mean(sentiments)
-                news_titles = [item.get('title', 'No Title') for item in news_items]
-                print(f"Fetched {len(news_titles)} articles from GNews for {ticker_symbol}.")
-                return avg_sentiment, news_titles
+                news_list = []
+                for item in news_items:
+                    title = item.get('title', 'No Title')
+                    published_date_str = item.get('published date')
+                    if published_date_str:
+                        try:
+                            # Format: 'Tue, 21 May 2024 10:00:00 GMT'
+                            dt_object = datetime.strptime(published_date_str, '%a, %d %b %Y %H:%M:%S %Z')
+                            published_date = dt_object.strftime('%Y-%m-%d')
+                        except ValueError:
+                            published_date = "Unknown Date"
+                    else:
+                        published_date = "Unknown Date"
+                    news_list.append({'title': title, 'date': published_date})
+                print(f"Fetched {len(news_list)} articles from GNews for {ticker_symbol}.")
+                return avg_sentiment, news_list
         print(f"No recent news found for {ticker_symbol} from GNews.")
         return None, []
     except Exception as e:
         print(f"Error fetching or processing GNews for {ticker_symbol}: {e}")
         return None, []
 
-def extract_financial_events(content: str) -> list[str]:
+def extract_financial_events(content: str) -> list[dict]:
     """
     Extracts potential financial events from text content.
 
@@ -679,21 +732,31 @@ def extract_financial_events(content: str) -> list[str]:
         content (str): The text content to analyze.
 
     Returns:
-        list: A list of identified financial event types.
+        list: A list of dictionaries, each with 'type' and 'keywords' of identified events.
     """
     events = []
-    if "earnings" in content.lower() or "quarterly results" in content.lower() or "revenue" in content.lower() or "profit" in content.lower():
-        events.append("Earnings Report")
-    if "merger" in content.lower() or "acquisition" in content.lower() or "takeover" in content.lower():
-        events.append("Merger/Acquisition")
-    if "layoff" in content.lower() or "job cuts" in content.lower() or "restructuring" in content.lower():
-        events.append("Layoffs/Restructuring")
-    if "dividend" in content.lower():
-        events.append("Dividend Announcement")
-    if "product launch" in content.lower() or "innovation" in content.lower() or "new technology" in content.lower():
-        events.append("Product/Innovation News")
-    if "lawsuit" in content.lower() or "regulatory" in content.lower() or "fine" in content.lower():
-        events.append("Legal/Regulatory Issue")
+    content_lower = content.lower()
+
+    if any(k in content_lower for k in ["earnings", "quarterly results", "revenue", "profit", "eps"]):
+        events.append({"type": "Earnings", "keywords": ["earnings", "revenue", "profit", "eps"]})
+    if any(k in content_lower for k in ["merger", "acquisition", "takeover", "buyout"]):
+        events.append({"type": "Acquisition", "keywords": ["merger", "acquisition", "takeover", "buyout"]})
+    if any(k in content_lower for k in ["layoff", "job cuts", "restructuring", "downsizing"]):
+        events.append({"type": "Restructuring", "keywords": ["layoff", "job cuts", "restructuring", "downsizing"]})
+    if any(k in content_lower for k in ["dividend", "payout"]):
+        events.append({"type": "Dividend", "keywords": ["dividend", "payout"]})
+    if any(k in content_lower for k in ["product launch", "innovation", "new technology", "patent"]):
+        events.append({"type": "Product/Innovation", "keywords": ["product launch", "innovation", "new technology", "patent"]})
+    if any(k in content_lower for k in ["lawsuit", "regulatory", "fine", "investigation", "compliance"]):
+        events.append({"type": "Legal/Regulatory", "keywords": ["lawsuit", "regulatory", "fine", "investigation", "compliance"]})
+    if any(k in content_lower for k in ["forecast", "outlook", "guidance", "target price"]):
+        events.append({"type": "Forecast/Guidance", "keywords": ["forecast", "outlook", "guidance", "target price"]})
+    if any(k in content_lower for k in ["downgrade", "analyst rating", "cut rating"]):
+        events.append({"type": "Analyst Downgrade", "keywords": ["downgrade", "analyst rating", "cut rating"]})
+    if any(k in content_lower for k in ["upgrade", "analyst rating", "raise rating"]):
+        events.append({"type": "Analyst Upgrade", "keywords": ["upgrade", "analyst rating", "raise rating"]})
+    if any(k in content_lower for k in ["insider buy", "insider purchase"]):
+        events.append({"type": "Insider Trading", "keywords": ["insider buy", "insider purchase"]})
     return events
 
 def assess_impact(events: list[str], sentiment: float) -> tuple[dict, list[str]]:
@@ -712,63 +775,102 @@ def assess_impact(events: list[str], sentiment: float) -> tuple[dict, list[str]]
     impact = {"short_term": "Neutral", "long_term": "Neutral"}
     alerts = []
 
-    # Prioritize specific events
-    if "Legal/Regulatory Issue" in events:
-        if sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Highly Negative"
-            impact["long_term"] = "Potentially Negative"
-            alerts.append("Alert: Legal/Regulatory issue with negative sentiment. High risk.")
-        elif sentiment > POSITIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Neutral"
-            impact["long_term"] = "Neutral"
-            alerts.append("Legal/Regulatory issue: Resolved or positive outcome implied.")
-        else:
-            alerts.append("Legal/Regulatory issue: Unclear impact, requires close monitoring.")
-        return impact, alerts # Override other impacts if this is present
+    # Prioritize specific events with direct impact
+    for event in events:
+        event_type = event['type']
+        if event_type == "Legal/Regulatory":
+            if sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Highly Negative"
+                impact["long_term"] = "Potentially Negative"
+                alerts.append("Alert: Legal/Regulatory issue with negative sentiment. High risk.")
+            elif sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Neutral"
+                impact["long_term"] = "Neutral"
+                alerts.append("Legal/Regulatory issue: Resolved or positive outcome implied.")
+            else:
+                alerts.append("Legal/Regulatory issue: Unclear impact, requires close monitoring.")
+            return impact, alerts # Override other impacts if this is present
 
-    if "Earnings Report" in events:
-        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Positive"
-            impact["long_term"] = "Positive"
-            alerts.append("Earnings Beat: Positive outlook.")
-        elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Negative"
-            impact["long_term"] = "Negative"
-            alerts.append("Earnings Miss: Negative outlook.")
-        else:
-            alerts.append("Earnings Report: Neutral sentiment.")
+        elif event_type == "Analyst Downgrade":
+            impact["short_term"] = "Bearish (2-3 days)"
+            impact["long_term"] = "Neutral to Negative"
+            alerts.append("📉 Analyst Downgrade: Expect short-term bearish pressure.")
+            return impact, alerts # Direct and strong impact
 
-    if "Merger/Acquisition" in events:
-        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Positive"
-            impact["long_term"] = "Positive"
-            alerts.append("Merger/Acquisition: Potentially positive for growth.")
-        elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Negative"
-            impact["long_term"] = "Negative"
-            alerts.append("Merger/Acquisition: Potentially negative (e.g., overpayment, integration issues).")
-        else:
-            alerts.append("Merger/Acquisition: Mixed sentiment, watch for details.")
-
-    if "Layoffs/Restructuring" in events:
-        if sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Negative"
-            impact["long_term"] = "Negative"
-            alerts.append("Layoffs/Restructuring: Indicates potential issues or cost-cutting.")
-        elif sentiment > POSITIVE_SENTIMENT_THRESHOLD: # Sometimes layoffs are seen positively for efficiency
-            impact["short_term"] = "Neutral to Positive"
+        elif event_type == "Analyst Upgrade":
+            impact["short_term"] = "Bullish (2-3 days)"
             impact["long_term"] = "Neutral to Positive"
-            alerts.append("Layoffs/Restructuring: Market views as positive for efficiency.")
-        else:
-            alerts.append("Layoffs/Restructuring: Neutral sentiment, requires further analysis.")
+            alerts.append("📈 Analyst Upgrade: Potential for short-term bullish momentum.")
+            return impact, alerts # Direct and strong impact
 
-    if "Product/Innovation News" in events:
-        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Positive"
-            impact["long_term"] = "Positive"
-            alerts.append("New Product/Innovation: Potential for future growth.")
-        else:
-            alerts.append("Product/Innovation News: Watch for market adoption and reception.")
+    # General event impacts
+    for event in events:
+        event_type = event['type']
+        if event_type == "Earnings":
+            if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Positive"
+                impact["long_term"] = "Positive"
+                alerts.append("Earnings Beat: Positive outlook. Momentum Likely (5-7 days).")
+            elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Negative"
+                impact["long_term"] = "Negative"
+                alerts.append("Earnings Miss: Negative outlook.")
+            else:
+                alerts.append("Earnings Report: Neutral sentiment.")
+
+        elif event_type == "Acquisition":
+            if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Positive"
+                impact["long_term"] = "Positive"
+                alerts.append("Merger/Acquisition: Potentially positive for growth.")
+            elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Negative"
+                impact["long_term"] = "Negative"
+                alerts.append("Merger/Acquisition: Potentially negative (e.g., overpayment, integration issues).")
+            else:
+                alerts.append("Merger/Acquisition: Mixed sentiment, watch for details.")
+
+        elif event_type == "Restructuring":
+            if sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Negative"
+                impact["long_term"] = "Negative"
+                alerts.append("Layoffs/Restructuring: Indicates potential issues or cost-cutting.")
+            elif sentiment > POSITIVE_SENTIMENT_THRESHOLD: # Sometimes layoffs are seen positively for efficiency
+                impact["short_term"] = "Neutral to Positive"
+                impact["long_term"] = "Neutral to Positive"
+                alerts.append("Layoffs/Restructuring: Market views as positive for efficiency.")
+            else:
+                alerts.append("Layoffs/Restructuring: Neutral sentiment, requires further analysis.")
+
+        elif event_type == "Product/Innovation":
+            if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Positive"
+                impact["long_term"] = "Positive"
+                alerts.append("New Product/Innovation: Potential for future growth.")
+            else:
+                alerts.append("Product/Innovation News: Watch for market adoption and reception.")
+
+        elif event_type == "Forecast/Guidance":
+            if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Positive"
+                impact["long_term"] = "Positive"
+                alerts.append("Positive Guidance: Company expects strong future performance.")
+            elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+                impact["short_term"] = "Negative"
+                impact["long_term"] = "Negative"
+                alerts.append("Negative Guidance: Company expects weaker future performance.")
+            else:
+                alerts.append("Neutral Guidance: Future performance in line with expectations.")
+        
+        elif event_type == "Insider Trading":
+            if sentiment > POSITIVE_SENTIMENT_THRESHOLD: # Insider buys are positive
+                impact["short_term"] = "Bullish"
+                impact["long_term"] = "Bullish"
+                alerts.append("Insider Buy: Strong signal of internal confidence.")
+            elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # Insider sells can be negative, but less strong
+                impact["short_term"] = "Neutral to Negative"
+                impact["long_term"] = "Neutral to Negative"
+                alerts.append("Insider Sell: May indicate lack of confidence, but often for personal reasons.")
 
     return impact, alerts
 
@@ -832,12 +934,239 @@ def generate_signal(impact: dict) -> str:
     Returns:
         str: 'Buy', 'Sell', or 'Hold'.
     """
-    if "Highly Negative" in impact.values() or "Negative" in impact.values():
+    if "Highly Negative" in impact.values() or "Negative" in impact.values() or "Bearish (2-3 days)" in impact.values():
         return 'Sell'
-    elif "Positive" in impact.values() or "Neutral to Positive" in impact.values():
+    elif "Positive" in impact.values() or "Neutral to Positive" in impact.values() or "Bullish (2-3 days)" in impact.values():
         return 'Buy'
     else:
         return 'Hold'
+
+# --- NEW FUNCTIONS FOR REQUESTED FEATURES ---
+
+def calculate_pivot_points(historical_data: pd.DataFrame) -> dict:
+    """
+    Calculates Classic Pivot Points (PP, R1, R2, R3, S1, S2, S3) for the last trading day.
+    Requires 'High', 'Low', and 'Close' from the previous day.
+
+    Args:
+        historical_data (pd.DataFrame): DataFrame with historical stock data.
+
+    Returns:
+        dict: A dictionary containing pivot points.
+    """
+    pivot_points = {}
+    if historical_data.empty or len(historical_data) < 2:
+        return {} # Need at least two days: current day for price, previous day for HLC
+
+    # Get the High, Low, Close of the *previous* trading day
+    prev_day = historical_data.iloc[-2]
+    prev_high = prev_day['High']
+    prev_low = prev_day['Low']
+    prev_close = prev_day['Close']
+
+    # Classic Pivot Point Calculation
+    pp = (prev_high + prev_low + prev_close) / 3
+    r1 = (2 * pp) - prev_low
+    s1 = (2 * pp) - prev_high
+    r2 = pp + (prev_high - prev_low)
+    s2 = pp - (prev_high - prev_low)
+    r3 = prev_high + (2 * (pp - prev_low))
+    s3 = prev_low - (2 * (prev_high - pp))
+
+    pivot_points['PP'] = pp
+    pivot_points['R1'] = r1
+    pivot_points['R2'] = r2
+    pivot_points['R3'] = r3
+    pivot_points['S1'] = s1
+    pivot_points['S2'] = s2
+    pivot_points['S3'] = s3
+
+    return pivot_points
+
+def forecast_short_term_trend(historical_data: pd.DataFrame, technical_indicators: dict) -> dict:
+    """
+    Provides a short-term forecast (e.g., 5 days) based on recent price action and volatility.
+
+    Args:
+        historical_data (pd.DataFrame): DataFrame with historical stock data.
+        technical_indicators (dict): Dictionary of calculated technical indicators (including BB_Upper, BB_Lower, ATR).
+
+    Returns:
+        dict: Contains 'expected_range_low', 'expected_range_high', 'trend_bias'.
+    """
+    forecast = {
+        'expected_range_low': None,
+        'expected_range_high': None,
+        'trend_bias': "Neutral"
+    }
+
+    if historical_data.empty or len(historical_data) < 20: # Need enough data for Bollinger Bands or meaningful trend
+        return forecast
+
+    current_price = historical_data['Close'].iloc[-1]
+    
+    # Expected Range using Bollinger Bands (if available) or simple volatility
+    bb_upper = technical_indicators.get('BB_Upper')
+    bb_lower = technical_indicators.get('BB_Lower')
+    atr = technical_indicators.get('ATR')
+
+    if bb_upper is not None and bb_lower is not None and not (math.isnan(bb_upper) or math.isnan(bb_lower)):
+        forecast['expected_range_high'] = bb_upper
+        forecast['expected_range_low'] = bb_lower
+    elif atr is not None and not math.isnan(atr):
+        # Simple range based on ATR (e.g., +/- 1.5 * ATR for 5 days)
+        # This is a heuristic, not a rigorous forecast model.
+        forecast_period_atr_multiplier = 1.5 # Heuristic for 5-day range
+        forecast['expected_range_high'] = current_price + (atr * forecast_period_atr_multiplier)
+        forecast['expected_range_low'] = current_price - (atr * forecast_period_atr_multiplier)
+    else:
+        # Fallback to a simple percentage if no advanced indicators
+        volatility_percentage = 0.03 # 3% up/down as a very rough estimate
+        forecast['expected_range_high'] = current_price * (1 + volatility_percentage)
+        forecast['expected_range_low'] = current_price * (1 - volatility_percentage)
+
+    # Trend Bias (based on recent price action / SMAs)
+    # Compare current price to SMA_5 or SMA_20
+    sma_5 = technical_indicators.get('SMA_5')
+    sma_20 = technical_indicators.get('SMA_20')
+
+    if sma_5 is not None and sma_20 is not None and not (math.isnan(sma_5) or math.isnan(sma_20)):
+        if sma_5 > sma_20:
+            forecast['trend_bias'] = "Bullish"
+        elif sma_5 < sma_20:
+            forecast['trend_bias'] = "Bearish"
+        else:
+            forecast['trend_bias'] = "Neutral"
+    elif len(historical_data) >= 5:
+        # Simple 5-day price change
+        price_change_5_days = (current_price - historical_data['Close'].iloc[-5]) / historical_data['Close'].iloc[-5]
+        if price_change_5_days > 0.01: # More than 1% up
+            forecast['trend_bias'] = "Bullish"
+        elif price_change_5_days < -0.01: # More than 1% down
+            forecast['trend_bias'] = "Bearish"
+        else:
+            forecast['trend_bias'] = "Neutral"
+
+    return forecast
+
+def detect_double_top_bottom(historical_data: pd.DataFrame, window: int = 20) -> str | None:
+    """
+    Detects simple double top or double bottom patterns.
+    This is a simplified detection and may not capture all nuances.
+
+    Args:
+        historical_data (pd.DataFrame): DataFrame with 'High' and 'Low' prices.
+        window (int): Look-back window for detecting peaks/troughs.
+
+    Returns:
+        str | None: "Double Top", "Double Bottom", or None.
+    """
+    if historical_data.empty or len(historical_data) < window * 2:
+        return None
+
+    df = historical_data.copy()
+    df['Peak'] = df['High'].rolling(window=window, center=True).max() == df['High']
+    df['Trough'] = df['Low'].rolling(window=window, center=True).min() == df['Low']
+
+    # Double Top Detection
+    peaks = df[df['Peak']].index.tolist()
+    if len(peaks) >= 2:
+        # Look for two recent peaks at similar levels
+        recent_peaks = peaks[-2:]
+        if len(recent_peaks) == 2:
+            peak1_price = df.loc[recent_peaks[0], 'High']
+            peak2_price = df.loc[recent_peaks[1], 'High']
+            
+            # Check if prices are similar (within 1% tolerance)
+            if abs(peak1_price - peak2_price) / ((peak1_price + peak2_price) / 2) < 0.01:
+                # Check for a trough between the peaks
+                trough_between_peaks = df.loc[recent_peaks[0]:recent_peaks[1], 'Low'].min()
+                # Trough should be significantly lower than peaks (e.g., 5% drop)
+                if (peak1_price - trough_between_peaks) / peak1_price > 0.05:
+                    return "Double Top"
+
+    # Double Bottom Detection
+    troughs = df[df['Trough']].index.tolist()
+    if len(troughs) >= 2:
+        # Look for two recent troughs at similar levels
+        recent_troughs = troughs[-2:]
+        if len(recent_troughs) == 2:
+            trough1_price = df.loc[recent_troughs[0], 'Low']
+            trough2_price = df.loc[recent_troughs[1], 'Low']
+
+            # Check if prices are similar (within 1% tolerance)
+            if abs(trough1_price - trough2_price) / ((trough1_price + trough2_price) / 2) < 0.01:
+                # Check for a peak between the troughs
+                peak_between_troughs = df.loc[recent_troughs[0]:recent_troughs[1], 'High'].max()
+                # Peak should be significantly higher than troughs (e.g., 5% rise)
+                if (peak_between_troughs - trough1_price) / trough1_price > 0.05:
+                    return "Double Bottom"
+    return None
+
+def detect_sma_crossover_pattern(technical_indicators: dict) -> str | None:
+    """
+    Detects simple SMA crossover patterns (Golden Cross, Death Cross).
+
+    Args:
+        technical_indicators (dict): Dictionary of calculated technical indicators.
+
+    Returns:
+        str | None: "Golden Cross", "Death Cross", or None.
+    """
+    sma_50 = technical_indicators.get('SMA_50')
+    sma_200 = technical_indicators.get('SMA_200')
+
+    if sma_50 is None or sma_200 is None or math.isnan(sma_50) or math.isnan(sma_200):
+        return None
+
+    # This function only checks the *current* state, not a crossover event.
+    # For true crossover detection, you'd need historical SMA values.
+    # For simplicity, we'll interpret the current relationship as a "pattern".
+    if sma_50 > sma_200:
+        return "Golden Cross (Bullish)"
+    elif sma_50 < sma_200:
+        return "Death Cross (Bearish)"
+    return None
+
+def calculate_risk_reward(entry_price: float, stop_loss: float, target_price: float) -> dict:
+    """
+    Calculates the Risk-Reward Ratio for a trade.
+
+    Args:
+        entry_price (float): The price at which the trade is entered.
+        stop_loss (float): The price at which the trade is exited to limit loss.
+        target_price (float): The price at which the trade is exited for profit.
+
+    Returns:
+        dict: Contains 'risk', 'reward', 'ratio', 'favorable_status'.
+    """
+    if not all(isinstance(arg, (int, float)) for arg in [entry_price, stop_loss, target_price]):
+        return {"risk": None, "reward": None, "ratio": None, "favorable_status": "Invalid input"}
+
+    if entry_price <= 0 or stop_loss <= 0 or target_price <= 0:
+        return {"risk": None, "reward": None, "ratio": None, "favorable_status": "Prices must be positive"}
+
+    risk = abs(entry_price - stop_loss)
+    reward = abs(target_price - entry_price)
+
+    if risk == 0:
+        return {"risk": risk, "reward": reward, "ratio": float('inf'), "favorable_status": "Risk is zero (unrealistic)"}
+    
+    ratio = reward / risk
+
+    if ratio >= 2: # Common threshold for favorable R:R
+        favorable_status = "Favorable"
+    elif ratio >= 1:
+        favorable_status = "Neutral"
+    else:
+        favorable_status = "Unfavorable"
+
+    return {
+        "risk": risk,
+        "reward": reward,
+        "ratio": ratio,
+        "favorable_status": favorable_status
+    }
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
@@ -877,35 +1206,63 @@ if __name__ == "__main__":
         else:
             print("Technical indicators skipped (pandas-ta not available or insufficient data).")
 
+        # Calculate Pivot Points
+        pivot_points = calculate_pivot_points(historical_data)
+        print("\n--- Pivot Points ---")
+        if pivot_points:
+            for k, v in pivot_points.items():
+                print(f"{k}: {v:.2f}")
+        else:
+            print("Could not calculate pivot points (insufficient data).")
+
+        # Forecast Short-Term Trend
+        short_term_forecast = forecast_short_term_trend(historical_data, technical_indicators)
+        print("\n--- Short-Term Forecast (Next 5 Days) ---")
+        if short_term_forecast['expected_range_low'] is not None and short_term_forecast['expected_range_high'] is not None:
+            print(f"Expected Range: ${short_term_forecast['expected_range_low']:.2f} - ${short_term_forecast['expected_range_high']:.2f}")
+            print(f"Trend Bias: {short_term_forecast['trend_bias']}")
+        else:
+            print("Could not generate short-term forecast.")
+
+        # Detect Chart Patterns
+        double_pattern = detect_double_top_bottom(historical_data)
+        sma_pattern = detect_sma_crossover_pattern(technical_indicators)
+        print("\n--- Chart Pattern Insights ---")
+        if double_pattern:
+            print(f"Detected: {double_pattern} pattern.")
+        if sma_pattern:
+            print(f"Detected: {sma_pattern} pattern.")
+        if not double_pattern and not sma_pattern:
+            print("No significant chart patterns detected.")
+
 
         # 3. Fetch News Sentiment (from NewsAPI and RSS)
         # Retrieve API keys from environment for direct script execution
         env_news_api_key = os.environ.get("NEWS_API_KEY")
         env_gnews_api_key = os.environ.get("GNEWS_API_KEY")
-        newsapi_sentiment, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key) # Pass key
+        newsapi_sentiment, newsapi_items = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key) # Pass key
 
         # Dynamically create ticker-specific RSS URL
         ticker_specific_rss_url = BASE_GOOGLE_NEWS_RSS_URL.format(ticker=TICKER)
-        rss_sentiment, rss_titles = fetch_news_sentiment_from_rss(ticker_specific_rss_url, TICKER)
+        rss_sentiment, rss_items = fetch_news_sentiment_from_rss(ticker_specific_rss_url, TICKER)
 
         # Combine sentiments and titles
         combined_sentiments = []
         # Fetch GNews sentiment (Pass key, though library might not use it)
-        gnews_sentiment, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key)
+        gnews_sentiment, gnews_items = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key)
 
 
-        combined_news_titles = []
+        combined_news_items = [] # This will store list of dicts
 
         if newsapi_sentiment is not None:
             combined_sentiments.append(newsapi_sentiment)
-            combined_news_titles.extend(newsapi_titles)
+            if newsapi_items: combined_news_items.extend(newsapi_items)
         if rss_sentiment is not None:
             combined_sentiments.append(rss_sentiment)
-            combined_news_titles.extend(rss_titles)
+            if rss_items: combined_news_items.extend(rss_items)
         if gnews_sentiment is not None: # Add GNews results
             combined_sentiments.append(gnews_sentiment)
-            combined_news_titles.extend(rss_titles)
-            combined_news_titles.extend(gnews_titles) # Correctly add GNews titles
+            if gnews_items: combined_news_items.extend(gnews_items)
         overall_news_sentiment = None
         if combined_sentiments:
             overall_news_sentiment = np.mean(combined_sentiments)
@@ -913,12 +1270,24 @@ if __name__ == "__main__":
         print("\n--- News Sentiment ---")
         if overall_news_sentiment is not None:
             print(f"Overall News Sentiment: {overall_news_sentiment:.2f}")
-            print("Recent News Titles (sample):")
-            # Convert to set to get unique titles, then back to list for slicing
-            for i, title in enumerate(list(set(combined_news_titles))[:10]):
-                print(f"  - {title}")
+            print("Recent News (sample):")
+            # Deduplicate based on title
+            seen_titles = set()
+            unique_items = []
+            for item in combined_news_items:
+                title = item.get('title')
+                if title not in seen_titles:
+                    unique_items.append(item)
+                    seen_titles.add(title)
+            for i, item in enumerate(unique_items[:10]):
+                print(f"  - {item.get('date', 'No Date')}: {item.get('title', 'No Title')}")
         else:
             print("Could not fetch news sentiment from any source.")
+
+        # Extract just titles for functions that expect a list of strings (e.g., enhanced_analysis)
+        # This list is derived from the unique_items (which include dates)
+        combined_news_titles_only = [item.get('title', '') for item in unique_items if item.get('title')]
+
 
         # 4. Basic Analysis (using overall news sentiment)
         basic_recommendation, basic_confidence, basic_reason = analyze_stock(historical_data, overall_news_sentiment)
@@ -937,7 +1306,7 @@ if __name__ == "__main__":
             company_fundamentals,
             overall_news_sentiment,
             social_media_sentiment_placeholder,
-            combined_news_titles # Using combined news titles for alerts
+            combined_news_titles_only # Using combined news titles for alerts
         )
 
         print(f"\n--- Enhanced Analysis for {TICKER} ---")
@@ -973,5 +1342,19 @@ if __name__ == "__main__":
             print("Event Alerts:")
             for alert in event_alerts:
                 print(f"  - {alert}")
+
+        # Risk-Reward Calculation Example
+        print("\n--- Risk-Reward Calculation Example ---")
+        example_entry = current_price
+        example_stop_loss = current_price * 0.95 # 5% below entry
+        example_target = current_price * 1.10 # 10% above entry
+        rr_result = calculate_risk_reward(example_entry, example_stop_loss, example_target)
+        print(f"Entry: ${example_entry:.2f}")
+        print(f"Stop Loss: ${example_stop_loss:.2f}")
+        print(f"Target: ${example_target:.2f}")
+        if rr_result['ratio'] is not None:
+            print(f"Risk-Reward Ratio: 1:{rr_result['ratio']:.2f} -> {rr_result['favorable_status']}")
+        else:
+            print(f"Risk-Reward Calculation Error: {rr_result['favorable_status']}")
 
     print("\nScript finished.")
