@@ -478,32 +478,26 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
     if total_signals == 0:
         return "Hold", 0, "No conclusive signals from available data.", alerts
 
-    final_confidence = max(0, min(int(confidence_score), 100)) # Cap confidence
+    # Cap the raw score to be within a 0-100 range before calculating final confidence
+    raw_score = max(0, min(confidence_score, 100))
 
-    # Determine recommendation based on signal counts first, then adjust with confidence bands
+    # Determine recommendation based on signal counts
     if buy_signals > sell_signals and buy_signals >= hold_signals:
         recommendation = "Buy"
+        # Confidence is how far the score is above neutral (50)
+        final_confidence = int((raw_score - 50) * 2) if raw_score > 50 else 0
     elif sell_signals > buy_signals and sell_signals >= hold_signals:
         recommendation = "Sell"
+        # Confidence is how far the score is below neutral (50)
+        final_confidence = int((50 - raw_score) * 2) if raw_score < 50 else 0
     else: # hold_signals are dominant or signals are very mixed
         recommendation = "Hold"
+        # Confidence is how close the score is to neutral (50)
+        final_confidence = int(100 - abs(raw_score - 50) * 2)
 
-    # Now, let the confidence score refine the "strength" of this recommendation
-    # This part is more about interpreting the confidence score in context of the recommendation
-    # The actual recommendation (Buy/Sell/Hold) is primarily from signal counts.
-    # The confidence score reflects how strong that signal is.
-    # Example: If recommendation is "Buy" and confidence is 30%, it's a "Weak Buy".
-    # The previous logic of setting recommendation based on confidence bands was a bit circular.
+    # Ensure confidence is always within the 0-100 range after calculation
+    final_confidence = max(0, min(final_confidence, 100))
 
-    # Let's ensure the confidence isn't misleadingly high if signals are very contradictory
-    # or if a strong negative (like massive EPS drop) has pulled it down.
-    # If recommendation is "Buy" but confidence is low (e.g. < 40), it's a weak buy.
-    # If recommendation is "Sell" but confidence is low (e.g. < 40), it's a weak sell.
-
-    # The override for dominant sell signals can remain if desired:
-    # if sell_signals > buy_signals + hold_signals and final_confidence < 50 :
-    #     recommendation = "Sell" # This could still be useful
-        
     return recommendation, final_confidence, f"Recommendation based on weighted analysis: {'; '.join(reasons)}", alerts
 
 # --- UTILITY FUNCTIONS ---
