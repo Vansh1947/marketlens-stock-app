@@ -82,11 +82,13 @@ RSI_BULLISH_NEUTRAL_THRESHOLD = 55 # For growth stock check
 PE_RATIO_UNDERVALUED_THRESHOLD = 15
 PE_RATIO_OVERVALUED_THRESHOLD = 30
 POSITIVE_SENTIMENT_THRESHOLD = 0.25 # Renamed from VERY_POSITIVE_SENTIMENT_THRESHOLD for consistency
-SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD = 0.10
-NEUTRAL_SENTIMENT_LOWER_BOUND = -0.10 # If sentiment is >= this and < SLIGHTLY_POSITIVE, it's Neutral
-NEGATIVE_SENTIMENT_THRESHOLD = -0.10 # Anything below this is considered Negative
+NEGATIVE_SENTIMENT_THRESHOLD = 0.0 # Anything below this is considered Negative (0.0 to 0.1 is Neutral)
 EPS_GROWTH_STRONG_THRESHOLD = 0.30 
 EPS_GROWTH_NEGATIVE_THRESHOLD = -0.1
+# New fundamental thresholds
+ROE_GOOD_THRESHOLD = 0.15 # 15%
+DEBT_TO_EQUITY_LOW_THRESHOLD = 0.5 # Lower is better
+DEBT_TO_EQUITY_HIGH_THRESHOLD = 1.5 # Higher is worse
 # --- END OF THRESHOLDS ---
 
 # --- Recommendation Bands based on Final Score ---
@@ -151,32 +153,45 @@ def _calculate_confidence_level(technical_indicators: dict, company_fundamentals
         elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
             confidence_raw_score -= 10 # Overvalued P/E
 
-    eps_growth = company_fundamentals.get('earningsGrowth')
+    eps_growth = company_fundamentals.get('earningsGrowth') # Year over Year EPS Growth
     if eps_growth is not None:
         if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
             confidence_raw_score += 15 # Strong EPS Growth
         elif eps_growth < EPS_GROWTH_NEGATIVE_THRESHOLD:
             confidence_raw_score -= 15 # Negative EPS Growth
 
+    return_on_equity = company_fundamentals.get('returnOnEquity')
+    if return_on_equity is not None:
+        if return_on_equity > ROE_GOOD_THRESHOLD: # e.g., > 15%
+            confidence_raw_score += 15 # Strong ROE
+        elif return_on_equity < 0: # Negative ROE is a bad sign
+            confidence_raw_score -= 15 # Negative ROE
+
+    debt_to_equity = company_fundamentals.get('debtToEquity')
+    if debt_to_equity is not None and not np.isinf(debt_to_equity):
+        if debt_to_equity < DEBT_TO_EQUITY_LOW_THRESHOLD:
+            confidence_raw_score += 10 # Low Debt/Equity
+        elif debt_to_equity > DEBT_TO_EQUITY_HIGH_THRESHOLD:
+            confidence_raw_score -= 10 # High Debt/Equity
+
     # Sentiment Contribution
     if news_sentiment is not None:
-        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
+        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1 (new threshold)
             confidence_raw_score += 10 # Positive news
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0 (new threshold)
             confidence_raw_score -= 10 # Negative news
 
     # Normalize the raw score to a 0-100 range.
-    # Max theoretical positive contribution: 10+15+10+10 (tech) + 10+15 (fund) + 10 (sent) = 80
-    # Max theoretical negative contribution: -10-15-10-10 (tech) -10-15 (fund) -10 (sent) = -80
-    # So, the raw score range is approximately -80 to +80.
-    # We map this to 0-100 where 0 is -80, 50 is 0, and 100 is +80.
+    # Max theoretical positive contribution: 10+15+10+10 (tech) + 10+15+15+10 (fund) + 10 (sent) = 115
+    # Max theoretical negative contribution: -10-15-10-10 (tech) -10-15-15-10 (fund) -10 (sent) = -115
+    # So, the raw score range is approximately -115 to +115.
+    # We map this to 0-100 where 0 is -115, 50 is 0, and 100 is +115.
     # Formula: (score - min_raw_score) / (max_raw_score - min_raw_score) * 100
-    # (confidence_raw_score - (-80)) / (80 - (-80)) * 100
-    # (confidence_raw_score + 80) / 160 * 100
+    # (confidence_raw_score - (-115)) / (115 - (-115)) * 100
+    # (confidence_raw_score + 115) / 230 * 100
     
-    # Clamp the raw score to the expected range before normalization to prevent extreme values
-    clamped_raw_score = max(-80, min(80, confidence_raw_score))
-    confidence_level = int((clamped_raw_score + 80) / 160 * 100)
+    clamped_raw_score = max(-115, min(115, confidence_raw_score))
+    confidence_level = int((clamped_raw_score + 115) / 230 * 100)
     return max(0, min(100, confidence_level)) # Clamp between 0 and 100
 
 # --- TECHNICAL INDICATOR CALCULATIONS ---
@@ -261,81 +276,80 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
     hold_signals = 0
     reasons = []
     confidence_score = 0 # For dynamic confidence
+    
+    # Ensure company_fundamentals is available for confidence calculation
+    # This function is for basic analysis, so it might not have all fundamentals.
+    # The enhanced_analysis will have full fundamentals.
+    # For basic, we'll just pass an empty dict if not available.
+    company_fundamentals_for_basic = {} # Placeholder for basic analysis
 
     # SMA Crossover
     sma_5 = technical_indicators.get('SMA_5')
     sma_20 = technical_indicators.get('SMA_20')
     if sma_5 is not None and sma_20 is not None:
         if sma_5 > sma_20:
-            buy_signals += 1
+            buy_signals += 1 # Bullish
             reasons.append("5-day SMA above 20-day SMA (Bullish Crossover)")
-            confidence_score += 20
         elif sma_5 < sma_20:
-            sell_signals += 1
+            sell_signals += 1 # Bearish
             reasons.append("5-day SMA below 20-day SMA (Bearish Crossover)")
-            confidence_score += 15 # Sell signals also contribute to confidence in the signal
         else:
             hold_signals += 1
             reasons.append("5-day and 20-day SMAs are close (Neutral Crossover)")
-            confidence_score += 5
 
     # RSI
     rsi_value = technical_indicators.get('RSI')
     if rsi_value is not None:
         if rsi_value < RSI_OVERSOLD_THRESHOLD:
-            buy_signals += 1
+            buy_signals += 1 # Oversold is bullish
             reasons.append(f"RSI ({rsi_value:.2f}) indicates oversold condition")
-            confidence_score += 20
         elif rsi_value > RSI_OVERBOUGHT_THRESHOLD:
-            sell_signals += 1
+            sell_signals += 1 # Overbought is bearish
             reasons.append(f"RSI ({rsi_value:.2f}) indicates overbought condition")
-            confidence_score += 20
         else:
             hold_signals += 1
             reasons.append(f"RSI ({rsi_value:.2f}) is neutral")
-            confidence_score += 10
 
     # MACD
     macd_value = technical_indicators.get('MACD')
     macd_signal_value = technical_indicators.get('MACD_Signal')
     if macd_value is not None and macd_signal_value is not None:
         if macd_value > macd_signal_value:
-            buy_signals += 1
+            buy_signals += 1 # Bullish crossover
             reasons.append("MACD above MACD Signal (Bullish MACD Crossover)")
-            confidence_score += 25
         elif macd_value < macd_signal_value:
-            sell_signals += 1
+            sell_signals += 1 # Bearish crossover
             reasons.append("MACD below MACD Signal (Bearish MACD Crossover)")
-            confidence_score += 20
         else:
             hold_signals += 1
             reasons.append("MACD and MACD Signal are close (Neutral MACD)")
-            confidence_score += 5
 
     # News Sentiment
     if news_sentiment is not None:
-        if news_sentiment >= POSITIVE_SENTIMENT_THRESHOLD:
+        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
             buy_signals += 1
             reasons.append(f"Positive news sentiment ({news_sentiment:.2f})")
-            confidence_score += 20
-        elif news_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD:
-            buy_signals += 0.5 # Fractional signal, or adjust confidence
-            reasons.append(f"Slightly positive news sentiment ({news_sentiment:.2f})")
-            confidence_score += 10
         elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # Using the new NEGATIVE_SENTIMENT_THRESHOLD
             sell_signals += 1
             reasons.append(f"Negative news sentiment ({news_sentiment:.2f})")
-            confidence_score += 15
         else: # Neutral
             hold_signals += 1
             reasons.append(f"Neutral news sentiment ({news_sentiment:.2f})")
-            confidence_score += 5
 
     total_signals = buy_signals + sell_signals + hold_signals
     if total_signals == 0: # No valid indicators to base a decision on
         return "Hold", 0, "No conclusive signals from available data." # Default confidence to 0 if no signals
 
-    final_confidence = max(0, min(int(confidence_score), 100)) # Cap confidence
+    # For basic analysis, confidence is simply based on the number of aligned signals
+    # This is a simpler confidence than the enhanced one.
+    if buy_signals > sell_signals:
+        final_confidence = int((buy_signals / total_signals) * 100)
+    elif sell_signals > buy_signals:
+        final_confidence = int((sell_signals / total_signals) * 100)
+    else: # Mixed or neutral
+        final_confidence = 50 # Neutral confidence
+
+    final_confidence = max(0, min(final_confidence, 100)) # Ensure it's within 0-100
 
     if buy_signals > sell_signals and buy_signals >= hold_signals:
         return "Buy", final_confidence, "Primary signals suggest Buy: " + "; ".join(reasons)
@@ -425,6 +439,34 @@ def _calculate_fundamental_score(company_fundamentals: dict) -> tuple[float, dic
         else:
             breakdown["EPS Growth"] = f"0 (Neutral at {eps_growth:.2%})"
 
+    # Return on Equity (ROE)
+    return_on_equity = company_fundamentals.get('returnOnEquity')
+    if return_on_equity is not None:
+        if return_on_equity > ROE_GOOD_THRESHOLD: # e.g., > 15%
+            score += 15
+            breakdown["Return on Equity (ROE)"] = f"+15 (Strong at {return_on_equity:.2%})"
+        elif return_on_equity < 0: # Negative ROE
+            score -= 15
+            breakdown["Return on Equity (ROE)"] = f"-15 (Negative at {return_on_equity:.2%})"
+        else:
+            breakdown["Return on Equity (ROE)"] = f"0 (Neutral at {return_on_equity:.2%})"
+    else:
+        breakdown["Return on Equity (ROE)"] = "N/A"
+
+    # Debt to Equity
+    debt_to_equity = company_fundamentals.get('debtToEquity')
+    if debt_to_equity is not None and not np.isinf(debt_to_equity):
+        if debt_to_equity < DEBT_TO_EQUITY_LOW_THRESHOLD: # e.g., < 0.5
+            score += 10
+            breakdown["Debt to Equity"] = f"+10 (Low Debt at {debt_to_equity:.2f})"
+        elif debt_to_equity > DEBT_TO_EQUITY_HIGH_THRESHOLD: # e.g., > 1.5
+            score -= 10
+            breakdown["Debt to Equity"] = f"-10 (High Debt at {debt_to_equity:.2f})"
+        else:
+            breakdown["Debt to Equity"] = f"0 (Moderate Debt at {debt_to_equity:.2f})"
+    else:
+        breakdown["Debt to Equity"] = "N/A"
+
     return max(0, min(100, score)), breakdown
 
 def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dict, list]:
@@ -433,17 +475,20 @@ def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dic
     breakdown = {}
     alerts = []
 
-    if news_sentiment is not None:
+    if news_sentiment is not None: # Sentiment rule: <0 = Negative, 0-0.1 = Neutral, >0.1 = Positive
         if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
-            score += 20 # Strong positive impact
-            alerts.append(f"Notice: Strong positive news sentiment detected ({news_sentiment:.2f}).")
+            score += 20 # Positive impact
+            alerts.append(f"Notice: Positive news sentiment detected ({news_sentiment:.2f}).")
+            sentiment_label = "Positive"
         elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
-            score -= 20 # Strong negative impact
-            alerts.append(f"Alert: Strong negative news sentiment detected ({news_sentiment:.2f}).")
+            score -= 20 # Negative impact
+            alerts.append(f"Alert: Negative news sentiment detected ({news_sentiment:.2f}).")
+            sentiment_label = "Negative"
         else: # 0.0 to 0.1 (inclusive of 0.0)
+            sentiment_label = "Neutral"
             pass # Neutral, no score change, no specific alert
         
-        breakdown["Overall News Sentiment"] = f"{news_sentiment:.2f}"
+        breakdown["Overall News Sentiment"] = f"{news_sentiment:.2f} ({sentiment_label})"
     else:
         breakdown["Overall News Sentiment"] = "N/A"
 

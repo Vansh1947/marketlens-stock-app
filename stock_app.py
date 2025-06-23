@@ -207,7 +207,7 @@ if st.button("Analyze Stock"):
 
             # 2. Calculate Technical Indicators
             st.markdown("---") # Visual separator
-            with st.expander("⚙️ Technical Indicators (Last Values)", expanded=False): # Added emoji
+            with st.expander("⚙️ Key Indicators (Last Values)", expanded=False): # Changed title
                 technical_indicators = calculate_technical_indicators(historical_data)
                 st.write(f"**SMA_5:** {technical_indicators.get('SMA_5', 'N/A'):.2f}")
                 st.write(f"**SMA_20:** {technical_indicators.get('SMA_20', 'N/A'):.2f}")
@@ -217,7 +217,13 @@ if st.button("Analyze Stock"):
                 macd_signal_val = technical_indicators.get('MACD_Signal')
                 if macd_val is not None and macd_signal_val is not None:
                     st.write(f"**MACD:** {macd_val:.2f} (Signal: {macd_signal_val:.2f})")
-
+                
+                st.markdown("---")
+                st.markdown("**Key Fundamental Metrics:**")
+                st.write(f"**P/E Ratio:** {company_fundamentals.get('trailingPE', 'N/A'):.2f}")
+                st.write(f"**EPS Growth (YoY):** {company_fundamentals.get('earningsGrowth', 'N/A'):.2%}")
+                st.write(f"**Return on Equity (ROE):** {company_fundamentals.get('returnOnEquity', 'N/A'):.2%}")
+                st.write(f"**Debt to Equity:** {company_fundamentals.get('debtToEquity', 'N/A'):.2f}")
 
             # 3. Fetch News Sentiment (from NewsAPI and GNews)
             # Initialize newsapi_client for Streamlit app context if not already done in stock.py
@@ -336,17 +342,23 @@ if st.button("Analyze Stock"):
                 if "P/E Ratio" in breakdown["Fundamental Analysis"]:
                     summary_reasons.append(f"P/E Ratio: {breakdown['Fundamental Analysis']['P/E Ratio']}")
                 if "EPS Growth" in breakdown["Fundamental Analysis"]:
-                    summary_reasons.append(f"EPS Growth: {breakdown['Fundamental Analysis']['EPS Growth']}")
+                    summary_reasons.append(f"EPS Growth: {breakdown['Fundamental Analysis']['EPS Growth'].split('(')[0].strip()}")
+                if "Return on Equity (ROE)" in breakdown["Fundamental Analysis"]:
+                    summary_reasons.append(f"ROE: {breakdown['Fundamental Analysis']['Return on Equity (ROE)'].split('(')[0].strip()}")
+                if "Debt to Equity" in breakdown["Fundamental Analysis"]:
+                    summary_reasons.append(f"Debt/Equity: {breakdown['Fundamental Analysis']['Debt to Equity'].split('(')[0].strip()}")
                 # Sentiment highlight
                 if "Overall News Sentiment" in breakdown["Sentiment Analysis"]:
-                    summary_reasons.append(f"News Sentiment: {breakdown['Sentiment Analysis']['Overall News Sentiment']}")
+                    # Extract just the label, e.g., "0.15 (Positive)" -> "Positive"
+                    sentiment_display = breakdown["Sentiment Analysis"]["Overall News Sentiment"].split('(')[1].replace(')', '')
+                    summary_reasons.append(f"News Sentiment: {sentiment_display}")
 
                 # Limit to top 5 reasons, prioritizing the order they are added
                 final_summary_reason_str = "Recommendation based on analysis: " + "; ".join(summary_reasons[:5])
                 if len(summary_reasons) > 5:
                     final_summary_reason_str += "; ..." # Indicate more reasons if truncated
                 st.markdown(f"**Primary Reasons:** {final_summary_reason_str}")
-
+                
                 if alerts: # Display critical alerts from enhanced analysis again for emphasis
                     st.warning("Important Alerts to Consider (from Enhanced Analysis):")
                     for alert in alerts:
