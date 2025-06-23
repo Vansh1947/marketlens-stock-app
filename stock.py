@@ -81,10 +81,11 @@ RSI_OVERBOUGHT_THRESHOLD = 70
 RSI_BULLISH_NEUTRAL_THRESHOLD = 55 # For growth stock check
 PE_RATIO_UNDERVALUED_THRESHOLD = 15
 PE_RATIO_OVERVALUED_THRESHOLD = 30
-POSITIVE_SENTIMENT_THRESHOLD = 0.25 # Renamed from VERY_POSITIVE_SENTIMENT_THRESHOLD for consistency
-NEGATIVE_SENTIMENT_THRESHOLD = 0.0 # Anything below this is considered Negative (0.0 to 0.1 is Neutral)
+POSITIVE_SENTIMENT_THRESHOLD = 0.1 # For sentiment classification: >0.1 is Positive
+NEGATIVE_SENTIMENT_THRESHOLD = 0.0 # For sentiment classification: <0.0 is Negative
 EPS_GROWTH_STRONG_THRESHOLD = 0.30 
 EPS_GROWTH_NEGATIVE_THRESHOLD = -0.1
+VOLUME_HIGH_THRESHOLD_MULTIPLIER = 1.5 # Current volume > 1.5 * SMA_5_Volume
 # New fundamental thresholds
 ROE_GOOD_THRESHOLD = 0.15 # 15%
 DEBT_TO_EQUITY_LOW_THRESHOLD = 0.5 # Lower is better
@@ -105,7 +106,7 @@ def classify_recommendation(final_score: float) -> str:
     else:  # < 20
         return "Strong Sell"
 
-def _calculate_confidence_level(technical_indicators: dict, company_fundamentals: dict, news_sentiment: float | None) -> int:
+def _calculate_confidence_level(technical_indicators: dict, company_fundamentals: dict, news_sentiment: float | None, historical_data: pd.DataFrame) -> int:
     """
     Calculates a confidence level based on a weighted sum of individual indicator contributions.
     The score is normalized to a 0-100 range, where 50 is neutral, 100 is strong buy confidence,
@@ -174,24 +175,27 @@ def _calculate_confidence_level(technical_indicators: dict, company_fundamentals
         elif debt_to_equity > DEBT_TO_EQUITY_HIGH_THRESHOLD:
             confidence_raw_score -= 10 # High Debt/Equity
 
+    # Volume Contribution
+    volume_sma_5 = technical_indicators.get('Volume_SMA_5')
+    current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
+
+    if volume_sma_5 is not None and current_volume is not None:
+        if current_volume > volume_sma_5 * VOLUME_HIGH_THRESHOLD_MULTIPLIER:
+            confidence_raw_score += 5 # High volume confirms trend, adds confidence
+
     # Sentiment Contribution
     if news_sentiment is not None:
-        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1 (new threshold)
+        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
             confidence_raw_score += 10 # Positive news
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0 (new threshold)
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
             confidence_raw_score -= 10 # Negative news
 
     # Normalize the raw score to a 0-100 range.
-    # Max theoretical positive contribution: 10+15+10+10 (tech) + 10+15+15+10 (fund) + 10 (sent) = 115
+    # Max theoretical positive contribution: 10+15+10+10 (tech) + 10+15+15+10 (fund) + 10 (sent) + 5 (volume) = 120
     # Max theoretical negative contribution: -10-15-10-10 (tech) -10-15-15-10 (fund) -10 (sent) = -115
-    # So, the raw score range is approximately -115 to +115.
-    # We map this to 0-100 where 0 is -115, 50 is 0, and 100 is +115.
-    # Formula: (score - min_raw_score) / (max_raw_score - min_raw_score) * 100
-    # (confidence_raw_score - (-115)) / (115 - (-115)) * 100
-    # (confidence_raw_score + 115) / 230 * 100
-    
-    clamped_raw_score = max(-115, min(115, confidence_raw_score))
-    confidence_level = int((clamped_raw_score + 115) / 230 * 100)
+    # So, the raw score range is approximately -115 to +120.
+    clamped_raw_score = max(-115, min(120, confidence_raw_score))
+    confidence_level = int((clamped_raw_score + 115) / 235 * 100) # Adjusted denominator
     return max(0, min(100, confidence_level)) # Clamp between 0 and 100
 
 # --- TECHNICAL INDICATOR CALCULATIONS ---
@@ -274,11 +278,9 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
     buy_signals = 0
     sell_signals = 0
     hold_signals = 0
-    reasons = []
-    confidence_score = 0 # For dynamic confidence
-    
-    # Ensure company_fundamentals is available for confidence calculation
-    # This function is for basic analysis, so it might not have all fundamentals.
+    reasons = []    
+    # company_fundamentals is not used in basic analysis, but passed for consistency
+    # with enhanced_analysis signature if it were to be extended.
     # The enhanced_analysis will have full fundamentals.
     # For basic, we'll just pass an empty dict if not available.
     company_fundamentals_for_basic = {} # Placeholder for basic analysis
@@ -287,29 +289,22 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
     sma_5 = technical_indicators.get('SMA_5')
     sma_20 = technical_indicators.get('SMA_20')
     if sma_5 is not None and sma_20 is not None:
-        if sma_5 > sma_20:
-            buy_signals += 1 # Bullish
+        if sma_5 > sma_20: # Bullish
+            buy_signals += 1
             reasons.append("5-day SMA above 20-day SMA (Bullish Crossover)")
-        elif sma_5 < sma_20:
-            sell_signals += 1 # Bearish
+        elif sma_5 < sma_20: # Bearish
+            sell_signals += 1
             reasons.append("5-day SMA below 20-day SMA (Bearish Crossover)")
         else:
             hold_signals += 1
             reasons.append("5-day and 20-day SMAs are close (Neutral Crossover)")
 
     # RSI
-    rsi_value = technical_indicators.get('RSI')
+    rsi_value = technical_indicators.get('RSI') # No change here, logic is fine
     if rsi_value is not None:
-        if rsi_value < RSI_OVERSOLD_THRESHOLD:
-            buy_signals += 1 # Oversold is bullish
-            reasons.append(f"RSI ({rsi_value:.2f}) indicates oversold condition")
-        elif rsi_value > RSI_OVERBOUGHT_THRESHOLD:
-            sell_signals += 1 # Overbought is bearish
-            reasons.append(f"RSI ({rsi_value:.2f}) indicates overbought condition")
-        else:
-            hold_signals += 1
-            reasons.append(f"RSI ({rsi_value:.2f}) is neutral")
-
+        if rsi_value < RSI_OVERSOLD_THRESHOLD: buy_signals += 1; reasons.append(f"RSI ({rsi_value:.2f}) indicates oversold condition")
+        elif rsi_value > RSI_OVERBOUGHT_THRESHOLD: sell_signals += 1; reasons.append(f"RSI ({rsi_value:.2f}) indicates overbought condition")
+        else: hold_signals += 1; reasons.append(f"RSI ({rsi_value:.2f}) is neutral")
     # MACD
     macd_value = technical_indicators.get('MACD')
     macd_signal_value = technical_indicators.get('MACD_Signal')
@@ -326,37 +321,25 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
 
     # News Sentiment
     if news_sentiment is not None:
-        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
+        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1 (new threshold)
             buy_signals += 1
             reasons.append(f"Positive news sentiment ({news_sentiment:.2f})")
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # Using the new NEGATIVE_SENTIMENT_THRESHOLD
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0 (new threshold)
             sell_signals += 1
             reasons.append(f"Negative news sentiment ({news_sentiment:.2f})")
         else: # Neutral
             hold_signals += 1
             reasons.append(f"Neutral news sentiment ({news_sentiment:.2f})")
 
-    total_signals = buy_signals + sell_signals + hold_signals
-    if total_signals == 0: # No valid indicators to base a decision on
-        return "Hold", 0, "No conclusive signals from available data." # Default confidence to 0 if no signals
-
-    # For basic analysis, confidence is simply based on the number of aligned signals
-    # This is a simpler confidence than the enhanced one.
-    if buy_signals > sell_signals:
-        final_confidence = int((buy_signals / total_signals) * 100)
-    elif sell_signals > buy_signals:
-        final_confidence = int((sell_signals / total_signals) * 100)
-    else: # Mixed or neutral
-        final_confidence = 50 # Neutral confidence
-
+    total_signals = buy_signals + sell_signals + hold_signals # No change here, logic is fine
+    if total_signals == 0: return "Hold", 0, "No conclusive signals from available data." # Default confidence to 0 if no signals
+    if buy_signals > sell_signals: final_confidence = int((buy_signals / total_signals) * 100)
+    elif sell_signals > buy_signals: final_confidence = int((sell_signals / total_signals) * 100)
+    else: final_confidence = 50 # Neutral confidence
     final_confidence = max(0, min(final_confidence, 100)) # Ensure it's within 0-100
-
-    if buy_signals > sell_signals and buy_signals >= hold_signals:
-        return "Buy", final_confidence, "Primary signals suggest Buy: " + "; ".join(reasons)
-    elif sell_signals > buy_signals and sell_signals >= hold_signals:
-        return "Sell", final_confidence, "Primary signals suggest Sell: " + "; ".join(reasons)
-    else:
-        return "Hold", final_confidence, "Mixed or neutral signals: " + "; ".join(reasons)
+    if buy_signals > sell_signals and buy_signals >= hold_signals: return "Buy", final_confidence, "Primary signals suggest Buy: " + "; ".join(reasons)
+    elif sell_signals > buy_signals and sell_signals >= hold_signals: return "Sell", final_confidence, "Primary signals suggest Sell: " + "; ".join(reasons)
+    else: return "Hold", final_confidence, "Mixed or neutral signals: " + "; ".join(reasons)
 
 # --- CATEGORIZED SCORING ENGINE ---
 
@@ -406,6 +389,18 @@ def _calculate_technical_score(technical_indicators: dict, historical_data: pd.D
             score -= 15
             breakdown["Long-term SMA Cross"] = "-15 (Death Cross)"
 
+    # Volume Activity
+    volume_sma_5 = technical_indicators.get('Volume_SMA_5')
+    current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
+
+    if volume_sma_5 is not None and current_volume is not None:
+        if current_volume > volume_sma_5 * VOLUME_HIGH_THRESHOLD_MULTIPLIER:
+            score += 5
+            breakdown["Volume Activity"] = f"+5 (Current volume {current_volume:.0f} significantly above 5-day SMA {volume_sma_5:.0f})"
+        else:
+            breakdown["Volume Activity"] = f"0 (Current volume {current_volume:.0f} near 5-day SMA {volume_sma_5:.0f})"
+    else:
+        breakdown["Volume Activity"] = "N/A"
     return max(0, min(100, score)), breakdown
 
 def _calculate_fundamental_score(company_fundamentals: dict) -> tuple[float, dict]:
@@ -518,8 +513,8 @@ def enhanced_analysis(historical_data: pd.DataFrame, technical_indicators: dict,
     final_score_value = (tech_score + fund_score + sent_score) / 3
 
     # 3. Classify recommendation and calculate confidence
-    recommendation = classify_recommendation(final_score_value) # This uses the final_score_value
-    confidence_level = _calculate_confidence_level(technical_indicators, company_fundamentals, news_sentiment)
+    recommendation = classify_recommendation(final_score_value)
+    confidence_level = _calculate_confidence_level(technical_indicators, company_fundamentals, news_sentiment, historical_data)
 
     # 4. Combine all breakdowns for a full report
     master_breakdown = {

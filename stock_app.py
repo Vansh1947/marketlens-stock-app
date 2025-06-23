@@ -212,6 +212,7 @@ if st.button("Analyze Stock"):
                 st.write(f"**SMA_5:** {technical_indicators.get('SMA_5', 'N/A'):.2f}")
                 st.write(f"**SMA_20:** {technical_indicators.get('SMA_20', 'N/A'):.2f}")
                 st.write(f"**RSI:** {technical_indicators.get('RSI', 'N/A'):.2f}")
+                st.write(f"**Volume_SMA_5:** {technical_indicators.get('Volume_SMA_5', 'N/A'):.2f}")
                 
                 macd_val = technical_indicators.get('MACD')
                 macd_signal_val = technical_indicators.get('MACD_Signal')
@@ -345,6 +346,8 @@ if st.button("Analyze Stock"):
                     summary_reasons.append(f"EPS Growth: {breakdown['Fundamental Analysis']['EPS Growth'].split('(')[0].strip()}")
                 if "Return on Equity (ROE)" in breakdown["Fundamental Analysis"]:
                     summary_reasons.append(f"ROE: {breakdown['Fundamental Analysis']['Return on Equity (ROE)'].split('(')[0].strip()}")
+                if "Volume Activity" in breakdown["Technical Analysis"]:
+                    summary_reasons.append(f"Volume: {breakdown['Technical Analysis']['Volume Activity'].split('(')[0].strip()}")
                 if "Debt to Equity" in breakdown["Fundamental Analysis"]:
                     summary_reasons.append(f"Debt/Equity: {breakdown['Fundamental Analysis']['Debt to Equity'].split('(')[0].strip()}")
                 # Sentiment highlight
