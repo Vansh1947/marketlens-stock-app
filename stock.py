@@ -9,6 +9,7 @@ import numpy as np
 from textblob import TextBlob
 from datetime import datetime, timedelta
 
+
 # Conditional imports for external APIs
 try:
     import yfinance as yf
@@ -356,18 +357,19 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
 
 
     if pe_ratio is not None and not np.isinf(pe_ratio):
-        if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD:
+        if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD: # e.g. < 15
             buy_signals += 1
             reasons.append(f"Low P/E Ratio ({pe_ratio:.2f})")
-            confidence_score += 5 
-        elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
+            confidence_score += 5
+            # Check for tech sector context even when undervalued
+            if sector and "technology" in sector.lower() and pe_ratio < 20:
+                reasons.append(f"P/E ({pe_ratio:.2f}) is especially low for Technology sector.")
+                confidence_score += 5
+        elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD: # e.g. > 30
             # sell_signals += 1 # High P/E for growth stock might be normal
             reasons.append(f"High P/E Ratio ({pe_ratio:.2f})")
             confidence_score -= 5 # High P/E is generally a slight negative for confidence
-        if sector and "technology" in sector.lower() and pe_ratio < 20:
-            reasons.append(f"P/E ({pe_ratio:.2f}) is relatively low for Technology sector.")
-            confidence_score += 5 
-        else:
+        else: # P/E is in the neutral range
             hold_signals += 1
             reasons.append(f"Neutral P/E Ratio ({pe_ratio:.2f})")
     else:
