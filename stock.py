@@ -191,11 +191,15 @@ def _calculate_confidence_level(technical_indicators: dict, company_fundamentals
             confidence_raw_score -= 10 # Negative news
 
     # Normalize the raw score to a 0-100 range.
-    # Max theoretical positive contribution: 10+15+10+10 (tech) + 10+15+15+10 (fund) + 10 (sent) + 5 (volume) = 120
-    # Max theoretical negative contribution: -10-15-10-10 (tech) -10-15-15-10 (fund) -10 (sent) = -115
-    # So, the raw score range is approximately -115 to +120.
-    clamped_raw_score = max(-115, min(120, confidence_raw_score))
-    confidence_level = int((clamped_raw_score + 115) / 235 * 100) # Adjusted denominator
+    # Max theoretical positive contribution: 10+15+10+10 (tech) + 10+15+15+10 (fund) + 5 (volume) + 10 (sent) = 110
+    # Max theoretical negative contribution: -10-15-10-10 (tech) -10-15-15-10 (fund) -10 (sent) = -105
+    # So, the raw score range is approximately -105 to +110.
+    MAX_CONFIDENCE_SCORE = 110
+    MIN_CONFIDENCE_SCORE = -105
+    
+    clamped_raw_score = max(MIN_CONFIDENCE_SCORE, min(MAX_CONFIDENCE_SCORE, confidence_raw_score))
+    # Scale the clamped score from [MIN, MAX] to [0, 100]
+    confidence_level = int(((clamped_raw_score - MIN_CONFIDENCE_SCORE) / (MAX_CONFIDENCE_SCORE - MIN_CONFIDENCE_SCORE)) * 100)
     return max(0, min(100, confidence_level)) # Clamp between 0 and 100
 
 # --- TECHNICAL INDICATOR CALCULATIONS ---
@@ -714,15 +718,15 @@ def get_stock_data(ticker_symbol: str) -> tuple[pd.DataFrame | None, float | Non
             company_fundamentals.get('marketCap') is None):
             return None, None, None, f"No valid data or fundamentals found for '{ticker_symbol}'. It might be an invalid ticker, delisted, or data is unavailable."
 
-        # Fetch 1 year of daily historical data for comprehensive analysis
+        # Fetch 2 years of daily historical data for comprehensive analysis
         historical_data = stock.history(period="2y")
 
         if historical_data.empty:
             # We might have fundamentals, but no historical data for the specified period
             current_price_from_info = company_fundamentals.get('regularMarketPrice') or company_fundamentals.get('currentPrice')
-            # It's unusual to have fundamentals but no historical data for a valid, active ticker over "1y"
+            # It's unusual to have fundamentals but no historical data for a valid, active ticker over "2y"
             # but we return what we have along with a message.
-            return None, current_price_from_info, company_fundamentals, f"No historical data found for '{ticker_symbol}' for the period '1y'. Some fundamental data might be available."
+            return None, current_price_from_info, company_fundamentals, f"No historical data found for '{ticker_symbol}' for the period '2y'. Some fundamental data might be available."
 
         # Ensure 'Close' column exists and has data before accessing iloc[-1]
         if 'Close' in historical_data.columns and not historical_data['Close'].empty:

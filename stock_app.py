@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-import sys # Add this import
 st.set_page_config(
     page_title="MarketLens - Stock Analysis",
     page_icon="🔍",  # Lens emoji or 📈
@@ -194,8 +193,6 @@ if st.button("Analyze Stock"):
                     else:
                         st.write("Could not generate RSI chart (not enough data or pandas-ta issue).")
 
-                # Initialize fig_macd before the expander
-                fig_macd = None 
                 with st.expander("📊 MACD Chart", expanded=False): # Added emoji, removed one level of nesting
                     fig_macd = create_macd_chart(historical_data, ticker_symbol_processed)
                     if fig_macd:
