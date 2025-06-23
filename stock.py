@@ -89,55 +89,6 @@ EPS_GROWTH_STRONG_THRESHOLD = 0.30
 EPS_GROWTH_NEGATIVE_THRESHOLD = -0.1
 # --- END OF THRESHOLDS ---
 
-# --- Keyword Impact Configuration for Sentiment Analysis ---
-KEYWORD_IMPACTS = {
-    "dividend": 5,
-    "buyback": 8,
-    "layoffs": -10,
-    "lawsuit": -12,
-    "partnership": 7,
-    "guidance cut": -15,
-    "upgrade": 10,
-    "downgrade": -10,
-    # Existing keywords, ensure they are here if still desired
-    "fraud": -15, "scandal": -15, "investigation": -10, "acquisition": 7,
-    "growth": 5, "expansion": 5, "profit": 5, "innovat": 7, "ai": 8,
-    "robotaxi": 8, "bullish outlook": 6, "bankruptcy": -20,
-}
-
-
-
-# --- Keyword Impact Configuration for Sentiment Analysis ---
-KEYWORD_IMPACTS = {
-    "fraud": -15,
-    "scandal": -15,
-    "investigation": -10,
-    "lawsuit": -12,
-    "outperform": 8,
-    "acquisition": 7,
-    "growth": 5,
-    "expansion": 5,
-    "profit": 5,
-    "innovat": 7,
-    "ai": 8,
-    "robotaxi": 8,
-    "bullish outlook": 6,
-    "bankruptcy": -20,
-}
-
-# --- Sector-Aware Weighting Configuration ---
-# Weights for combining category scores. Must sum to 1.0 for each sector. (T: Technical, F: Fundamental, S: Sentiment)
-SECTOR_WEIGHTS = {
-    "Retail": {"technical": 0.30, "fundamental": 0.50, "sentiment": 0.20},
-    "Technology": {"technical": 0.30, "fundamental": 0.20, "sentiment": 0.50}, # Adjusted for Tech
-    "Healthcare": {"technical": 0.25, "fundamental": 0.45, "sentiment": 0.30}, # Kept as is
-    "Financial Services": {"technical": 0.30, "fundamental": 0.40, "sentiment": 0.30}, # Kept as is
-    "Consumer Cyclical": {"technical": 0.25, "fundamental": 0.40, "sentiment": 0.35}, # Adjusted for Consumer/Retail
-    "Industrials": {"technical": 0.40, "fundamental": 0.40, "sentiment": 0.20}, # Kept as is
-    "Energy": {"technical": 0.40, "fundamental": 0.20, "sentiment": 0.40}, # Kept as is
-    "DEFAULT": {"technical": 0.33, "fundamental": 0.33, "sentiment": 0.33}, # Adjusted for Default
-}
-
 # --- Recommendation Bands based on Final Score ---
 def classify_recommendation(final_score: float) -> str:
     """Classifies a final score into a recommendation string."""
@@ -159,33 +110,16 @@ def _calculate_confidence_level(category_scores: dict, historical_data: pd.DataF
     """
     # Confidence based on signal alignment (how far each category score is from neutral 50)
     # Max deviation for one score is 50 (0 or 100). For 3 scores, max sum of deviations is 150.
-    conf_alignment = sum([abs(score - 50) for score in category_scores.values()]) / 150
+    # A higher sum of absolute deviations means stronger, more aligned signals.
+    # Divide by 150 (max possible deviation) to normalize to 0-1.
+    # Then multiply by 100 for percentage.
+    signal_alignment_score = sum([abs(score - 50) for score in category_scores.values()]) / 150
 
-    # Volatility penalty
-    volatility_factor = _calculate_volatility_factor(historical_data)
-
-    # Adjusted Confidence: Higher alignment and lower volatility lead to higher confidence
-    confidence_level = int((conf_alignment * 100) * (1 - volatility_factor))
+    # Confidence is directly proportional to signal alignment.
+    # A score of 50 (neutral) for all categories means 0 alignment, 0 confidence.
+    # A score of 0 or 100 for all categories means 100% alignment, 100% confidence.
+    confidence_level = int(signal_alignment_score * 100)
     return max(0, min(100, confidence_level)) # Clamp between 0 and 100
-
-def _calculate_volatility_factor(historical_data: pd.DataFrame) -> float:
-    """
-    Calculates a volatility factor based on the standard deviation of daily returns.
-    Returns a factor between 0 and 1, where 0 means no reduction and 1 means full reduction.
-    """
-    if historical_data.empty or len(historical_data) < 2:
-        return 0.0 # No volatility if no data
-
-    returns = historical_data['Close'].pct_change().dropna()
-    if returns.empty:
-        return 0.0
-
-    std_dev = returns.std()
-    volatility_factor = min(std_dev / 0.02, 0.5) # Max 50% reduction for very high volatility (0.02 is an arbitrary scaling factor)
-    return volatility_factor
-
-
-
 
 # --- TECHNICAL INDICATOR CALCULATIONS ---
 def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
@@ -443,34 +377,515 @@ def _calculate_sentiment_score(news_sentiment: float | None, market_news: list) 
 
     if news_sentiment is not None:
         if news_sentiment >= 0.3:
-            score += 20
-            breakdown["Overall News Sentiment"] = f"+20 (Strong Positive: {news_sentiment:.2f})"
+            score += 15 # Strong positive impact
+            alerts.append(f"Alert: Strong positive news sentiment ({news_sentiment:.2f}).")
         elif news_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD:
-            score += 10
-            breakdown["Overall News Sentiment"] = f"+10 (Mild Positive: {news_sentiment:.2f})"
+            score += 5 # Mild positive impact
         elif news_sentiment <= -0.3:
-            score -= 20
-            breakdown["Overall News Sentiment"] = f"-20 (Strong Negative: {news_sentiment:.2f})"
+            score -= 15 # Strong negative impact
+            alerts.append(f"Alert: Strong negative news sentiment ({news_sentiment:.2f}).")
         elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            score -= 10
-            breakdown["Overall News Sentiment"] = f"-10 (Mild Negative: {news_sentiment:.2f})"
-        else:
-            breakdown["Overall News Sentiment"] = f"0 (Neutral: {news_sentiment:.2f})"
+            score -= 5 # Mild negative impact
+        
+        # Always add overall news sentiment to breakdown
+        breakdown["Overall News Sentiment"] = f"{score - 50:+.0f} (Score: {news_sentiment:.2f})"
+    else:
+        breakdown["Overall News Sentiment"] = "0 (Not Available)"
 
-    for news in market_news:
-        news_lower = news.lower()
-        if any(keyword in news_lower for keyword in ["fraud", "scandal", "investigation"]):
-            # Special handling for critical negative keywords
-            impact_value = KEYWORD_IMPACTS.get("investigation", 0) # Use 'investigation' as a general negative keyword
-            alerts.append(f"Alert: Company-specific negative news: '{news}'")
-            score += impact_value
-            breakdown["Keyword: Investigation/Fraud"] = f"{'+' if impact_value >= 0 else ''}{impact_value}"
-        else: # Process other keywords if no critical negative ones are found in this news item
-            for keyword, impact_value in KEYWORD_IMPACTS.items():
-                if keyword in news_lower:
-                    alerts.append(f"Alert: Keyword '{keyword}' detected: '{news}'")
-                    score += impact_value
-                    breakdown[f"Keyword: {keyword.capitalize()}"] = f"{'+' if impact_value >= 0 else ''}{impact_value}"
+    # Simplified alerts based on overall sentiment
+    if news_sentiment is not None:
+        if news_sentiment >= POSITIVE_SENTIMENT_THRESHOLD:
+            alerts.append("Overall news sentiment is positive.")
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+            alerts.append("Overall news sentiment is negative.")
+
+    return max(0, min(100, score)), breakdown, alerts
+
+# --- ADVANCED ANALYSIS ---
+def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technical_indicators: dict,
+                      company_fundamentals: dict, news_sentiment: float | None,
+                      social_media_sentiment: float | None, market_news: list) -> tuple:
+    """
+    Performs an enhanced, categorized, and simplified stock analysis.
+
+    Returns:
+        tuple: (Recommendation, Confidence_Level, Alerts, Master_Breakdown, Category_Scores, Final_Score_Value)
+    """
+    # 1. Calculate scores for each category
+    tech_score, tech_breakdown = _calculate_technical_score(technical_indicators, historical_data)
+    fund_score, fund_breakdown = _calculate_fundamental_score(company_fundamentals)
+    sent_score, sent_breakdown, alerts = _calculate_sentiment_score(news_sentiment, market_news)
+
+    category_scores = {
+        "Technical": tech_score,
+        "Fundamental": fund_score,
+        "Sentiment": sent_score,
+    }
+
+    # 2. Calculate final weighted score (using a simple average, no sector-specific weights)
+    # This simplifies the logic as requested.
+    final_score_value = (tech_score + fund_score + sent_score) / 3
+
+    # 3. Classify recommendation and calculate confidence
+    recommendation = classify_recommendation(final_score_value)
+    confidence_level = _calculate_confidence_level(category_scores, historical_data) # Volatility removed from here
+
+    # 4. Combine all breakdowns for a full report
+    master_breakdown = {
+        "Technical Analysis": tech_breakdown,
+        "Fundamental Analysis": fund_breakdown,
+        "Sentiment Analysis": sent_breakdown,
+        "Final Score Calculation": {
+            "Final Score Value (Weighted Average)": f"{final_score_value:.2f}",
+            "Confidence Level": f"{confidence_level}%"
+        }
+    }
+
+    return recommendation, confidence_level, alerts, master_breakdown, category_scores, final_score_value
+
+# --- UTILITY FUNCTIONS ---
+def analyze_sentiment(text: str) -> float:
+    """
+    Analyzes the sentiment of a given text using TextBlob.
+
+    Args:
+        text (str): The input text.
+
+    Returns:
+        float: Sentiment polarity score (-1.0 to 1.0).
+    """
+    if not isinstance(text, str) or not text.strip(): # Check for empty or whitespace-only strings
+        return 0.0 # Return neutral sentiment for non-string or empty input
+    return TextBlob(text).sentiment.polarity
+
+def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[str]]:
+    """
+    Fetches recent news articles for a given ticker symbol from NewsAPI
+    and calculates the average sentiment.
+
+    Returns:
+        tuple: (Average sentiment: float | None, List of news titles: list)
+    """
+    if not api_key:
+        print("NewsAPI key not provided. Skipping NewsAPI fetch.")
+        return None, []
+    
+    if not NewsApiClient: # Check if the library was successfully imported
+        # A warning is already printed at import time.
+        return None, []
+
+    newsapi_client = NewsApiClient(api_key=api_key)
+    all_articles = []
+    try:
+        # Fetch news from the last 7 days (free tier usually limits to 30 days history)
+        from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        to_date = datetime.now().strftime('%Y-%m-%d')
+
+        articles_response = newsapi_client.get_everything(q=ticker_symbol,
+                                                          language='en',
+                                                          sort_by='relevancy',
+                                                          from_param=from_date,
+                                                          to=to_date,
+                                                          page_size=20) # Max 20 articles per request for free tier
+
+        if articles_response and articles_response['articles']:
+            all_articles = articles_response['articles']
+            sentiments = [analyze_sentiment(article.get('title', '') + " " + (article.get('description', '') or ""))
+                          for article in all_articles if article.get('title') or article.get('description')]
+            if sentiments:
+                avg_sentiment = np.mean(sentiments)
+                news_titles = [article.get('title', 'No Title') for article in all_articles]
+                print(f"Fetched {len(news_titles)} articles from NewsAPI for {ticker_symbol}.")
+                return avg_sentiment, news_titles
+        print(f"No recent news found for {ticker_symbol} from NewsAPI.")
+        return None, []
+    except NewsAPIException as e: # type: ignore [misc] # misc because NewsAPIException could be the mock
+        error_details = str(e) # Standard way to get exception message.
+        # Check for common error substrings if specific codes/methods aren't available
+        # on the exception object (especially if it's the mock or an older library version).
+        # Also, try to use get_code() if available for more specific handling.
+        is_rate_limited = 'rateLimited' in error_details.lower() or ('get_code' in dir(e) and callable(e.get_code) and e.get_code() == 'rateLimited')
+        is_api_key_invalid = 'apiKeyInvalid' in error_details.lower() or \
+                             'unauthorized' in error_details.lower() or \
+                             ('get_code' in dir(e) and callable(e.get_code) and e.get_code() == 'apiKeyInvalid')
+
+        if is_rate_limited:
+            print(f"NewsAPI Rate Limit Exceeded: {error_details}. Please wait before trying again.")
+        elif is_api_key_invalid:
+            print(f"NewsAPI Key Invalid/Unauthorized: {error_details}. Please check your NEWS_API_KEY environment variable.")
+        else:
+            code_info = f"(Code: {e.get_code()})" if ('get_code' in dir(e) and callable(e.get_code)) else ""
+            print(f"Error fetching news from NewsAPI for {ticker_symbol} {code_info}: {error_details}")
+        return None, []
+    except Exception as e:
+        print(f"An unexpected error occurred while fetching NewsAPI data for {ticker_symbol}: {e}")
+        return None, []
+
+def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str) -> tuple[float | None, list[str]]:
+    """
+    Fetches news from an RSS feed, filters by ticker symbol,
+    and calculates sentiment. Requires 'feedparser'.
+    """
+    if feedparser is None:
+        # print("Feedparser not available. Cannot fetch RSS news.") # Silenced
+        return None, []
+
+    relevant_articles = []
+    try:
+        feed = feedparser.parse(rss_url)
+        if not feed.entries:
+            # print(f"No entries found in RSS feed: {rss_url}") # Silenced
+            return None, []
+
+        for entry in feed.entries:
+            title = entry.get('title', '')
+            summary = entry.get('summary', '') # Use .get() for safety
+            content = title + " " + summary
+
+            # Simple check: see if ticker symbol is in title or summary (case-insensitive)
+            if ticker_symbol.lower() in content.lower():
+                relevant_articles.append(entry)
+
+        if relevant_articles:
+            sentiments = [analyze_sentiment(entry.get('title', '') + " " + (entry.get('summary', '') or ""))
+                          for entry in relevant_articles]
+            if sentiments:
+                avg_sentiment = np.mean(sentiments)
+                news_titles = [entry.get('title', 'No Title') for entry in relevant_articles]
+                # print(f"Fetched {len(news_titles)} relevant articles from RSS for {ticker_symbol}.") # Silenced
+                return avg_sentiment, news_titles
+        # print(f"No relevant news found for {ticker_symbol} in RSS feed.") # Silenced
+        return None, []
+    except Exception as e:
+        # print(f"Error fetching RSS news from {rss_url}: {e}") # Silenced
+        return None, []
+
+def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[str]]: # type: ignore
+    """
+    Fetches news for a given ticker symbol from GNews and calculates sentiment.
+        ticker_symbol (str): The stock ticker symbol (often for .NS market).
+        api_key (str | None): The GNews API key (though the gnews library might not strictly require it).
+    # The gnews library (v0.4.1) doesn't strictly require an API key for basic usage,
+    # but we keep the key parameter for consistency or future library versions.
+    Returns:
+        tuple: (Average sentiment: float | None, List of news titles: list)
+    """
+    if not gnews_client:
+        print("GNews client not initialized. Cannot fetch news from GNews.")
+        return None, []
+    
+    query = f"{ticker_symbol} stock news"
+    try:
+        # Assuming gnews_client.get_news(query) returns a list of article-like objects
+        # Each object is expected to have 'title' and 'description' attributes or similar.
+        # Adjust period and max_results as needed and if supported by the library.
+        # Some gnews libraries might require setting period, country, etc. during client initialization
+        # or on the get_news method.
+        # gnews_client.period = '7d' # Example: if the library supports setting period
+        # gnews_client.max_results = 10 # Example: if the library supports setting max results
+        news_items = gnews_client.get_news(query)
+
+        if news_items:
+            sentiments = [analyze_sentiment(item.get('title', '') + " " + (item.get('description', '') or item.get('text', '')))
+                          for item in news_items if item.get('title') or item.get('description') or item.get('text')]
+            if sentiments:
+                avg_sentiment = np.mean(sentiments)
+                news_titles = [item.get('title', 'No Title') for item in news_items]
+                print(f"Fetched {len(news_titles)} articles from GNews for {ticker_symbol}.")
+                return avg_sentiment, news_titles
+        print(f"No recent news found for {ticker_symbol} from GNews.")
+        return None, []
+    except Exception as e:
+        print(f"Error fetching or processing GNews for {ticker_symbol}: {e}")
+        return None, []
+
+def extract_financial_events(content: str) -> list[str]:
+    """
+    Extracts potential financial events from text content.
+
+    Args:
+        content (str): The text content to analyze.
+
+    Returns:
+        list: A list of identified financial event types.
+    """
+    events = []
+    if "earnings" in content.lower() or "quarterly results" in content.lower() or "revenue" in content.lower() or "profit" in content.lower():
+        events.append("Earnings Report")
+    if "merger" in content.lower() or "acquisition" in content.lower() or "takeover" in content.lower():
+        events.append("Merger/Acquisition")
+    if "layoff" in content.lower() or "job cuts" in content.lower() or "restructuring" in content.lower():
+        events.append("Layoffs/Restructuring")
+    if "dividend" in content.lower():
+        events.append("Dividend Announcement")
+    if "product launch" in content.lower() or "innovation" in content.lower() or "new technology" in content.lower():
+        events.append("Product/Innovation News")
+    if "lawsuit" in content.lower() or "regulatory" in content.lower() or "fine" in content.lower():
+        events.append("Legal/Regulatory Issue")
+    return events
+
+def assess_impact(events: list[str], sentiment: float) -> tuple[dict, list[str]]:
+    """
+    Assesses the potential short-term and long-term impact of financial events
+    based on their sentiment.
+
+    Args:
+        events (list): A list of identified financial event types.
+        sentiment (float): The sentiment score associated with the events (-1 to 1).
+
+    Returns:
+        tuple: (Impact dictionary: dict, Alerts list: list)
+               Impact dictionary has 'short_term' and 'long_term' keys.
+    """
+    impact = {"short_term": "Neutral", "long_term": "Neutral"}
+    alerts = []
+
+    # Prioritize specific events
+    if "Legal/Regulatory Issue" in events:
+        if sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+            impact["short_term"] = "Highly Negative"
+            impact["long_term"] = "Potentially Negative"
+            alerts.append("Alert: Legal/Regulatory issue with negative sentiment. High risk.")
+        elif sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+            impact["short_term"] = "Neutral"
+            impact["long_term"] = "Neutral"
+            alerts.append("Legal/Regulatory issue: Resolved or positive outcome implied.")
+        else:
+            alerts.append("Legal/Regulatory issue: Unclear impact, requires close monitoring.")
+        return impact, alerts # Override other impacts if this is present
+
+    if "Earnings Report" in events:
+        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+            impact["short_term"] = "Positive"
+            impact["long_term"] = "Positive"
+            alerts.append("Earnings Beat: Positive outlook.")
+        elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+            impact["short_term"] = "Negative"
+            impact["long_term"] = "Negative"
+            alerts.append("Earnings Miss: Negative outlook.")
+        else:
+            alerts.append("Earnings Report: Neutral sentiment.")
+
+    if "Merger/Acquisition" in events:
+        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+            impact["short_term"] = "Positive"
+            impact["long_term"] = "Positive"
+            alerts.append("Merger/Acquisition: Potentially positive for growth.")
+        elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+            impact["short_term"] = "Negative"
+            impact["long_term"] = "Negative"
+            alerts.append("Merger/Acquisition: Potentially negative (e.g., overpayment, integration issues).")
+        else:
+            alerts.append("Merger/Acquisition: Mixed sentiment, watch for details.")
+
+    if "Layoffs/Restructuring" in events:
+        if sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+            impact["short_term"] = "Negative"
+            impact["long_term"] = "Negative"
+            alerts.append("Layoffs/Restructuring: Indicates potential issues or cost-cutting.")
+        elif sentiment > POSITIVE_SENTIMENT_THRESHOLD: # Sometimes layoffs are seen positively for efficiency
+            impact["short_term"] = "Neutral to Positive"
+            impact["long_term"] = "Neutral to Positive"
+            alerts.append("Layoffs/Restructuring: Market views as positive for efficiency.")
+        else:
+            alerts.append("Layoffs/Restructuring: Neutral sentiment, requires further analysis.")
+
+    if "Product/Innovation News" in events:
+        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+            impact["short_term"] = "Positive"
+            impact["long_term"] = "Positive"
+            alerts.append("New Product/Innovation: Potential for future growth.")
+        else:
+            alerts.append("Product/Innovation News: Watch for market adoption and reception.")
+
+    return impact, alerts
+
+def get_stock_data(ticker_symbol: str) -> tuple[pd.DataFrame | None, float | None, dict | None, str | None]:
+    """
+    Fetches historical stock data and basic company fundamentals using yfinance.
+
+    Args:
+        ticker_symbol (str): The stock ticker symbol.
+
+    Returns:
+        tuple: (historical_data: pd.DataFrame, current_price: float,
+                company_fundamentals: dict, error_message: str)
+               Returns (None, None, None, error_message) on failure.
+    """
+    if yf is None:
+        return None, None, None, "Yfinance library not available. Cannot fetch stock data."
+
+    try:
+        stock = yf.Ticker(ticker_symbol)
+        # Attempt to fetch company info first to validate ticker and get fundamentals
+        company_fundamentals = stock.info
+
+        # A common sign of an invalid/delisted ticker is an empty info dict or missing key financial fields
+        if not company_fundamentals or \
+           (company_fundamentals.get('regularMarketPrice') is None and \
+            company_fundamentals.get('longName') is None and \
+            company_fundamentals.get('marketCap') is None):
+            return None, None, None, f"No valid data or fundamentals found for '{ticker_symbol}'. It might be an invalid ticker, delisted, or data is unavailable."
+
+        # Fetch 1 year of daily historical data for comprehensive analysis
+        historical_data = stock.history(period="2y")
+
+        if historical_data.empty:
+            # We might have fundamentals, but no historical data for the specified period
+            current_price_from_info = company_fundamentals.get('regularMarketPrice') or company_fundamentals.get('currentPrice')
+            # It's unusual to have fundamentals but no historical data for a valid, active ticker over "1y"
+            # but we return what we have along with a message.
+            return None, current_price_from_info, company_fundamentals, f"No historical data found for '{ticker_symbol}' for the period '1y'. Some fundamental data might be available."
+
+        # Ensure 'Close' column exists and has data before accessing iloc[-1]
+        if 'Close' in historical_data.columns and not historical_data['Close'].empty:
+            current_price_from_history = historical_data['Close'].iloc[-1]
+        else:
+            # Fallback if 'Close' is missing or empty, though unlikely if historical_data itself is not empty
+            current_price_from_history = company_fundamentals.get('regularMarketPrice') or company_fundamentals.get('currentPrice')
+            if current_price_from_history is None:
+                 return historical_data, None, company_fundamentals, f"Historical data fetched but 'Close' price is missing for {ticker_symbol}."
+
+        return historical_data, current_price_from_history, company_fundamentals, None
+    except Exception as e:
+        return None, None, None, f"Error fetching data for {ticker_symbol}: {type(e).__name__} - {e}"
+
+def generate_signal(impact: dict) -> str:
+    """
+    Generates a simple 'Buy', 'Sell', or 'Hold' signal based on impact assessment.
+
+    Args:
+        impact (dict): Dictionary with 'short_term' and 'long_term' impact.
+
+    Returns:
+        str: 'Buy', 'Sell', or 'Hold'.
+    """
+    if "Highly Negative" in impact.values() or "Negative" in impact.values():
+        return 'Sell'
+    elif "Positive" in impact.values() or "Neutral to Positive" in impact.values():
+        return 'Buy'
+    else:
+        return 'Hold'
+
+# --- MAIN EXECUTION ---
+if __name__ == "__main__":
+    while True:
+        ticker_input = input("Please enter the stock ticker symbol to analyze (e.g., AAPL, GOOG): ")
+        if ticker_input.strip():
+            TICKER = ticker_input.strip().upper()
+            break
+        else:
+            print("No ticker symbol entered. Please try again.")
+
+    # TICKER = args.ticker.strip().upper() # Convert to uppercase for consistency # Old argparse way
+   
+
+    print(f"Starting comprehensive stock analysis script for {TICKER}...")
+
+    # 1. Get Stock Data
+    historical_data, current_price, company_fundamentals, error = get_stock_data(TICKER)
+
+    if error:
+        print(f"\nError: {error}")
+    elif historical_data is None or historical_data.empty:
+        print(f"\nCould not retrieve sufficient data for {TICKER}. Exiting.")
+    else:
+        print(f"\n--- Data for {TICKER} ---")
+        print(f"Current Price: ${current_price:.2f}")
+
+        # 2. Calculate Technical Indicators
+        technical_indicators = calculate_technical_indicators(historical_data)
+        print("\n--- Technical Indicators ---")
+        if technical_indicators:
+            for k, v in technical_indicators.items():
+                if v is not None:
+                    print(f"{k}: {v:.2f}")
+                else:
+                    print(f"{k}: Not enough data")
+        else:
+            print("Technical indicators skipped (pandas-ta not available or insufficient data).")
+
+
+        # 3. Fetch News Sentiment (from NewsAPI and RSS)
+        # Retrieve API keys from environment for direct script execution
+        env_news_api_key = os.environ.get("NEWS_API_KEY")
+        env_gnews_api_key = os.environ.get("GNEWS_API_KEY")
+        newsapi_sentiment, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key) # Pass key
+
+        # Dynamically create ticker-specific RSS URL
+        ticker_specific_rss_url = BASE_GOOGLE_NEWS_RSS_URL.format(ticker=TICKER)
+        rss_sentiment, rss_titles = fetch_news_sentiment_from_rss(ticker_specific_rss_url, TICKER)
+
+        # Combine sentiments and titles
+        combined_sentiments = []
+        # Fetch GNews sentiment (Pass key, though library might not use it)
+        gnews_sentiment, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key)
+
+
+        combined_news_titles = []
+
+        if newsapi_sentiment is not None:
+            combined_sentiments.append(newsapi_sentiment)
+            combined_news_titles.extend(newsapi_titles)
+        if rss_sentiment is not None:
+            combined_sentiments.append(rss_sentiment)
+            combined_news_titles.extend(rss_titles)
+        if gnews_sentiment is not None: # Add GNews results
+            combined_sentiments.append(gnews_sentiment)
+            combined_news_titles.extend(gnews_titles) # Correctly add GNews titles
+        overall_news_sentiment = None
+        if combined_sentiments:
+            overall_news_sentiment = np.mean(combined_sentiments)
+
+        print("\n--- News Sentiment ---")
+        if overall_news_sentiment is not None:
+            print(f"Overall News Sentiment: {overall_news_sentiment:.2f}")
+            print("Recent News Titles (sample):")
+            # Convert to set to get unique titles, then back to list for slicing
+            for i, title in enumerate(list(set(combined_news_titles))[:10]):
+                print(f"  - {title}")
+        else:
+            print("Could not fetch news sentiment from any source.")
+
+        # 4. Basic Analysis (using overall news sentiment)
+        basic_recommendation, basic_confidence, basic_reason = analyze_stock(historical_data, overall_news_sentiment)
+        print(f"\n--- Basic Analysis for {TICKER} ---")
+        print(f"Recommendation: {basic_recommendation} (Confidence: {basic_confidence}%)")
+        print(f"Reason: {basic_reason}")
+
+        # 5. Enhanced Analysis
+        # Placeholder for social_media_sentiment - would need integration with a social media API
+        social_media_sentiment_placeholder = 0.1 # Example value
+
+        enhanced_recommendation, confidence_level, alerts, breakdown, category_scores, final_score_value = enhanced_analysis(
+            TICKER,
+            historical_data,
+            technical_indicators,
+            company_fundamentals,
+            overall_news_sentiment,
+            social_media_sentiment_placeholder,
+            combined_news_titles
+        )
+
+        print(f"\n--- Enhanced Analysis for {TICKER} ---")
+        print("Category Scores:")
+        for category, score in category_scores.items():
+            print(f"  - {category}: {score:.2f}/100")
+
+        print(f"Recommendation: {enhanced_recommendation} (Final Score: {final_score_value:.2f}, Confidence: {confidence_level}%)")
+        print("Reason Breakdown:")
+        for category, details in breakdown.items():
+            print(f"  - {category}:")
+            for reason, value in details.items():
+                print(f"    - {reason}: {value}")
+        if alerts:
+            print("Alerts:")
+            for alert in alerts:
+                print(f"  - {alert}")
+        else:
+            print("No specific alerts.")
+
+    print("\nScript finished.")
 
     return max(0, min(100, score)), breakdown, alerts
 

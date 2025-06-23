@@ -10,7 +10,7 @@ st.set_page_config(
 
 # Import all your functions from stock.py
 # Assuming stock.py is in the same directory or accessible via PYTHONPATH
-from stock import ( # Removed global client imports
+from stock import (
     get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
     fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis, extract_financial_events, assess_impact, generate_signal
 )
@@ -280,9 +280,9 @@ if st.button("Analyze Stock"):
                 st.write(f"**Reason:** {basic_reason}")
 
 
-            # 5. Enhanced Analysis
-            st.markdown("---") # Visual separator
-            social_media_sentiment_input = None # Explicitly None as it's a placeholder
+            # 5. Enhanced Analysis (Simplified)
+            st.markdown("---")  # Visual separator
+            social_media_sentiment_input = None  # Explicitly None as it's a placeholder
             enhanced_recommendation, confidence_level, alerts, breakdown, category_scores, final_score_value = enhanced_analysis(
                 ticker_symbol_processed,
                 historical_data,
@@ -292,35 +292,7 @@ if st.button("Analyze Stock"):
                 social_media_sentiment_input,
                 combined_news_titles
             )
-            st.markdown("<h3 style='color: #4682B4;'>✨ Enhanced Analysis</h3>", unsafe_allow_html=True) # Styled subheader
-
-            # Display Category Scores
-            st.markdown("##### Category Scores")
-            cols = st.columns(3)
-            with cols[0]:
-                st.metric("📊 Technical Score", f"{category_scores.get('Technical', 0):.0f}/100")
-            with cols[1]:
-                st.metric("📈 Fundamental Score", f"{category_scores.get('Fundamental', 0):.0f}/100")
-            with cols[2]:
-                st.metric("📰 Sentiment Score", f"{category_scores.get('Sentiment', 0):.0f}/100")
-
-            st.metric(label="Final Recommendation", value=enhanced_recommendation, help=f"Final Score Value: {final_score_value:.2f}")
-            # Display the new breakdown for explainability
-            with st.expander("Show Confidence Score Breakdown", expanded=True):
-                 for category, details in breakdown.items():
-                    st.markdown(f"**{category}**")
-                    for reason, value in details.items():
-                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{reason}:** `{value}`")
-            if alerts:
-                st.warning("Important News & Alerts:")               
-                for alert in alerts:
-                    st.write(f"  - {alert}")
-
-            # Financial Event Impact Analysis
-            st.markdown("---") # Visual separator
-            st.markdown("<h3 style='color: #4682B4;'>📰 Financial Event Impact Analysis</h3>", unsafe_allow_html=True)
-
-            news_item_for_event_analysis = ""
+            st.markdown("<h3 style='color: #4682B4;'>✨ Enhanced Analysis</h3>", unsafe_allow_html=True)  # Styled subheader
 
             if combined_news_titles:
                 news_item_for_event_analysis = combined_news_titles[0] # Use the first actual news title
@@ -334,33 +306,34 @@ if st.button("Analyze Stock"):
                 net profit declined due to rising operational costs. The company announced a
                 new strategic partnership aimed at expanding into new markets and is also
                 exploring cost-cutting measures.
-                """
-            
-            if news_item_for_event_analysis.strip():  # Ensure there's content to analyze
-                if is_sample_news_for_event_analysis:
-                    st.info("No live news fetched. Displaying event analysis with a sample news snippet.")
-                st.markdown(f"**Analyzing News Snippet:** `{news_item_for_event_analysis}`")
-                st.caption("Note: Event analysis is based on the news title/snippet. Full article content would provide deeper insights.")
-                events = extract_financial_events(news_item_for_event_analysis)
-                sentiment_for_event = analyze_sentiment(news_item_for_event_analysis)
-                impact, event_alerts = assess_impact(events, sentiment_for_event)
-                event_signal = generate_signal(impact)
+                """ # This sample news is now just for context, not for analysis
 
-                # Displaying the results of the event analysis
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric(label="Identified Events", value=(", ".join(events) if events else "None"))
-                    st.metric(label="Sentiment of this News", value=f"{sentiment_for_event:.2f}")
-                with col2:
-                    st.metric(label="Assessed Short-Term Impact", value=impact.get('short_term', 'N/A'))
-                    st.metric(label="Event-based Signal", value=event_signal)
-                
-                if event_alerts:
-                    with st.expander("Detailed Event Alerts from this News Item", expanded=False):
-                        for alert in event_alerts:
-                            st.write(f"• {alert}") # Use bullet points
-            else:
-                st.info("No news item available to perform financial event impact analysis for this stock.")
+            # Display Category Scores
+            st.markdown("##### Category Scores")
+            cols = st.columns(3)
+            with cols[0]:
+                st.metric("📊 Technical Score", f"{category_scores.get('Technical', 0):.0f}/100")
+            with cols[1]:
+                st.metric("📈 Fundamental Score", f"{category_scores.get('Fundamental', 0):.0f}/100")
+            with cols[2]:
+                st.metric("📰 Sentiment Score", f"{category_scores.get('Sentiment', 0):.0f}/100")
+
+            st.metric(label="Final Recommendation", value=enhanced_recommendation, help=f"Final Score Value: {final_score_value:.2f}")
+
+            # Display the new breakdown for explainability
+            with st.expander("Show Confidence Score Breakdown", expanded=True):
+                for category, details in breakdown.items():
+                    # Exclude the "Final Score Calculation" details from this specific breakdown view
+                    if category == "Final Score Calculation":
+                        continue
+                    st.markdown(f"**{category}**")
+                    for reason, value in details.items():
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{reason}:** `{value}`")
+
+            if alerts:
+                st.warning("Important News & Alerts:")
+                for alert in alerts:
+                    st.write(f"  - {alert}")
 
             st.markdown("---") # Visual separator
             # --- KEY ANALYSIS SUMMARY ---
@@ -368,13 +341,8 @@ if st.button("Analyze Stock"):
                 st.subheader(f"KEY ANALYSIS SUMMARY FOR {ticker_symbol_processed}")
                 st.metric(label="Final Recommendation", value=enhanced_recommendation)
                 st.metric(label="Confidence Level", value=f"{confidence_level}%")
-                st.markdown("**Score Calculation Details:**")
-                final_score_details = breakdown.get("Final Score Calculation", {})
-                st.write(f"**Sector:** {final_score_details.get('Sector', 'N/A')}")
-                st.write(f"**Category Weights:** {final_score_details.get('Weights', 'N/A')}")
-                st.write(f"**Final Score Value (Raw Weighted):** {final_score_details.get('Final Score Value (Raw Weighted)', 'N/A')}")
-                st.write(f"**Confidence Level (Adjusted for Volatility):** {final_score_details.get('Confidence Level (Adjusted for Volatility)', 'N/A')}")
-
+                # Simplified score calculation details
+                st.markdown(f"**Final Score Value (Weighted Average):** {final_score_value:.2f}")
 
                 if alerts: # Display critical alerts from enhanced analysis again for emphasis
                     st.warning("Important Alerts to Consider (from Enhanced Analysis):")
