@@ -314,9 +314,14 @@ if st.button("Analyze Stock"):
             with st.expander("Detailed Analysis Breakdown", expanded=False):
                 for category, details in breakdown.items():
                     st.markdown(f"**{category}**")
-                    for reason, value in details.items():
-                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{reason}:** `{value}`")
-
+                    for reason, item_details in details.items():
+                        points = item_details.get('points', 0)
+                        details_text = item_details.get('details', 'N/A')
+                        if "points" in item_details:
+                            display_value = f"{points:+.0f} ({details_text})"
+                        else:
+                            display_value = details_text
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{reason}:** `{display_value}`")
             if alerts:
                 st.warning("Important Alerts:")
                 for alert in alerts:
@@ -334,31 +339,45 @@ if st.button("Analyze Stock"):
 
                 # Construct a concise reason string for the summary
                 summary_reasons = []
+                
+                def get_summary_from_item(item_dict, default_text="Neutral"):
+                    points = item_dict.get('points', 0)
+                    details = item_dict.get('details', '')
+                    if points > 0:
+                        return f"+{points} ({details.split(' at ')[0]})"
+                    elif points < 0:
+                        return f"{points} ({details.split(' at ')[0]})"
+                    return f"0 ({default_text})"
+
                 # Technical highlights
-                if "Short-term SMA Cross" in breakdown["Technical Analysis"]:
-                    summary_reasons.append(f"Short-term SMA: {breakdown['Technical Analysis']['Short-term SMA Cross']}")
-                if "Long-term SMA Cross" in breakdown["Technical Analysis"]:
-                    summary_reasons.append(f"Long-term SMA: {breakdown['Technical Analysis']['Long-term SMA Cross']}")
-                if "RSI" in breakdown["Technical Analysis"]:
-                    summary_reasons.append(f"RSI: {breakdown['Technical Analysis']['RSI']}")
-                if "MACD Crossover" in breakdown["Technical Analysis"]:
-                    summary_reasons.append(f"MACD: {breakdown['Technical Analysis']['MACD Crossover']}")
+                tech_breakdown = breakdown.get("Technical Analysis", {})
+                if "Short-term SMA Cross" in tech_breakdown:
+                    summary_reasons.append(f"Short-term SMA: {get_summary_from_item(tech_breakdown['Short-term SMA Cross'])}")
+                if "Long-term SMA Cross" in tech_breakdown:
+                    summary_reasons.append(f"Long-term SMA: {get_summary_from_item(tech_breakdown['Long-term SMA Cross'])}")
+                if "RSI" in tech_breakdown:
+                    summary_reasons.append(f"RSI: {get_summary_from_item(tech_breakdown['RSI'])}")
+                if "MACD Crossover" in tech_breakdown:
+                    summary_reasons.append(f"MACD: {get_summary_from_item(tech_breakdown['MACD Crossover'])}")
+                if "Volume Activity" in tech_breakdown:
+                    summary_reasons.append(f"Volume: {'High' if tech_breakdown['Volume Activity'].get('points', 0) > 0 else 'Normal'}")
                 # Fundamental highlights
-                if "P/E Ratio" in breakdown["Fundamental Analysis"]:
-                    summary_reasons.append(f"P/E Ratio: {breakdown['Fundamental Analysis']['P/E Ratio']}")
-                if "EPS Growth" in breakdown["Fundamental Analysis"]:
-                    summary_reasons.append(f"EPS Growth: {breakdown['Fundamental Analysis']['EPS Growth'].split('(')[0].strip()}")
-                if "Return on Equity (ROE)" in breakdown["Fundamental Analysis"]:
-                    summary_reasons.append(f"ROE: {breakdown['Fundamental Analysis']['Return on Equity (ROE)'].split('(')[0].strip()}")
-                if "Volume Activity" in breakdown["Technical Analysis"]:
-                    summary_reasons.append(f"Volume: {breakdown['Technical Analysis']['Volume Activity'].split('(')[0].strip()}")
-                if "Debt to Equity" in breakdown["Fundamental Analysis"]:
-                    summary_reasons.append(f"Debt/Equity: {breakdown['Fundamental Analysis']['Debt to Equity'].split('(')[0].strip()}")
+                fund_breakdown = breakdown.get("Fundamental Analysis", {})
+                if "P/E Ratio" in fund_breakdown:
+                    summary_reasons.append(f"P/E Ratio: {get_summary_from_item(fund_breakdown['P/E Ratio'])}")
+                if "EPS Growth" in fund_breakdown:
+                    summary_reasons.append(f"EPS Growth: {get_summary_from_item(fund_breakdown['EPS Growth'])}")
+                if "Return on Equity (ROE)" in fund_breakdown:
+                    summary_reasons.append(f"ROE: {get_summary_from_item(fund_breakdown['Return on Equity (ROE)'])}")
+                if "Debt to Equity" in fund_breakdown:
+                    summary_reasons.append(f"Debt/Equity: {get_summary_from_item(fund_breakdown['Debt to Equity'])}")
                 # Sentiment highlight
-                if "Overall News Sentiment" in breakdown["Sentiment Analysis"]:
-                    # Extract just the label, e.g., "0.15 (Positive)" -> "Positive"
-                    sentiment_display = breakdown["Sentiment Analysis"]["Overall News Sentiment"].split('(')[1].replace(')', '')
-                    summary_reasons.append(f"News Sentiment: {sentiment_display}")
+                sent_breakdown = breakdown.get("Sentiment Analysis", {})
+                if "Overall News Sentiment" in sent_breakdown:
+                    sentiment_details = sent_breakdown["Overall News Sentiment"].get("details", "")
+                    if "Positive" in sentiment_details: summary_reasons.append("News Sentiment: Positive")
+                    elif "Negative" in sentiment_details: summary_reasons.append("News Sentiment: Negative")
+                    else: summary_reasons.append("News Sentiment: Neutral")
 
                 # Limit to top 5 reasons, prioritizing the order they are added
                 final_summary_reason_str = "Recommendation based on analysis: " + "; ".join(summary_reasons[:5])

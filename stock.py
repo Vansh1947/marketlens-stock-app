@@ -347,121 +347,127 @@ def _calculate_technical_score(technical_indicators: dict, historical_data: pd.D
     """Calculates a normalized technical score (0-100) and provides a breakdown."""
     score = 50.0
     breakdown = {}
-
+    
     rsi_val = technical_indicators.get('RSI')
     if rsi_val is not None:
         if rsi_val < RSI_OVERSOLD_THRESHOLD:
-            score += 15
-            breakdown["RSI"] = f"+15 (Oversold at {rsi_val:.2f})"
+            points, details = 15, f"Oversold at {rsi_val:.2f}"
         elif rsi_val > RSI_OVERBOUGHT_THRESHOLD:
-            score -= 15
-            breakdown["RSI"] = f"-15 (Overbought at {rsi_val:.2f})"
+            points, details = -15, f"Overbought at {rsi_val:.2f}"
         else:
-            breakdown["RSI"] = f"0 (Neutral at {rsi_val:.2f})"
-
+            points, details = 0, f"Neutral at {rsi_val:.2f}"
+        score += points
+        breakdown["RSI"] = {"points": points, "details": details}
+    
     macd_val = technical_indicators.get('MACD')
     macd_signal_val = technical_indicators.get('MACD_Signal')
     if macd_val is not None and macd_signal_val is not None:
         if macd_val > macd_signal_val:
-            score += 15
-            breakdown["MACD Crossover"] = "+15 (Bullish)"
+            points, details = 15, "Bullish"
         elif macd_val < macd_signal_val:
-            score -= 15
-            breakdown["MACD Crossover"] = "-15 (Bearish)"
-
+            points, details = -15, "Bearish"
+        else:
+            points, details = 0, "Neutral"
+        score += points
+        breakdown["MACD Crossover"] = {"points": points, "details": details}
+    
     sma_5_val = technical_indicators.get('SMA_5')
     sma_20_val = technical_indicators.get('SMA_20')
     if sma_5_val is not None and sma_20_val is not None:
         if sma_5_val > sma_20_val:
-            score += 10
-            breakdown["Short-term SMA Cross"] = "+10 (Bullish)"
+            points, details = 10, "Bullish"
         elif sma_5_val < sma_20_val:
-            score -= 10
-            breakdown["Short-term SMA Cross"] = "-10 (Bearish)"
-
+            points, details = -10, "Bearish"
+        else:
+            points, details = 0, "Neutral"
+        score += points
+        breakdown["Short-term SMA Cross"] = {"points": points, "details": details}
+    
     sma_50_val = technical_indicators.get('SMA_50')
     sma_200_val = technical_indicators.get('SMA_200')
     if sma_50_val is not None and sma_200_val is not None:
         if sma_50_val > sma_200_val:
-            score += 10
-            breakdown["Long-term SMA Cross"] = "+10 (Golden Cross)"
+            points, details = 10, "Golden Cross"
         else:
-            score -= 15
-            breakdown["Long-term SMA Cross"] = "-15 (Death Cross)"
-
+            points, details = -15, "Death Cross"
+        score += points
+        breakdown["Long-term SMA Cross"] = {"points": points, "details": details}
+    
     # Volume Activity
     volume_sma_5 = technical_indicators.get('Volume_SMA_5')
     current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
-
+    
     if volume_sma_5 is not None and current_volume is not None:
         if current_volume > volume_sma_5 * VOLUME_HIGH_THRESHOLD_MULTIPLIER:
-            score += 5
-            breakdown["Volume Activity"] = f"+5 (Current volume {current_volume:.0f} significantly above 5-day SMA {volume_sma_5:.0f})"
+            points = 5
+            details = f"Current volume {current_volume:,.0f} significantly above 5-day SMA {volume_sma_5:,.0f}"
         else:
-            breakdown["Volume Activity"] = f"0 (Current volume {current_volume:.0f} near 5-day SMA {volume_sma_5:.0f})"
+            points = 0
+            details = f"Current volume {current_volume:,.0f} near 5-day SMA {volume_sma_5:,.0f}"
+        score += points
+        breakdown["Volume Activity"] = {"points": points, "details": details}
     else:
-        breakdown["Volume Activity"] = "N/A"
+        breakdown["Volume Activity"] = {"points": 0, "details": "N/A"}
     return max(0, min(100, score)), breakdown
 
 def _calculate_fundamental_score(company_fundamentals: dict) -> tuple[float, dict]:
     """Calculates a normalized fundamental score (0-100) and provides a breakdown."""
     score = 50.0
     breakdown = {}
-
+    
     pe_ratio = company_fundamentals.get('trailingPE') if company_fundamentals else None
     eps_growth = company_fundamentals.get('earningsGrowth') if company_fundamentals else None
-
+    
     if pe_ratio is not None and not np.isinf(pe_ratio):
         if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD:
-            score += 15
-            breakdown["P/E Ratio"] = f"+15 (Undervalued at {pe_ratio:.2f})"
+            points, details = 15, f"Undervalued at {pe_ratio:.2f}"
         elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
-            score -= 10
-            breakdown["P/E Ratio"] = f"-10 (Overvalued at {pe_ratio:.2f})"
+            points, details = -10, f"Overvalued at {pe_ratio:.2f}"
         else:
-            breakdown["P/E Ratio"] = f"0 (Neutral at {pe_ratio:.2f})"
-
+            points, details = 0, f"Neutral at {pe_ratio:.2f}"
+        score += points
+        breakdown["P/E Ratio"] = {"points": points, "details": details}
+    
     if eps_growth is not None:
         if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
-            score += 25
-            breakdown["EPS Growth"] = f"+25 (Strong at {eps_growth:.2%})"
+            points, details = 25, f"Strong at {eps_growth:.2%}"
         elif eps_growth < -0.30:
-            score -= 30
-            breakdown["EPS Growth"] = f"-30 (Decline at {eps_growth:.2%})"
+            points, details = -30, f"Decline at {eps_growth:.2%}"
         elif eps_growth < 0:
-            score -= 15
-            breakdown["EPS Growth"] = f"-15 (Negative at {eps_growth:.2%})"
+            points, details = -15, f"Negative at {eps_growth:.2%}"
         else:
-            breakdown["EPS Growth"] = f"0 (Neutral at {eps_growth:.2%})"
-
+            points, details = 0, f"Neutral at {eps_growth:.2%}"
+        score += points
+        breakdown["EPS Growth"] = {"points": points, "details": details}
+    
     # Return on Equity (ROE)
     return_on_equity = company_fundamentals.get('returnOnEquity')
     if return_on_equity is not None:
         if return_on_equity > ROE_GOOD_THRESHOLD: # e.g., > 15%
-            score += 15
-            breakdown["Return on Equity (ROE)"] = f"+15 (Strong at {return_on_equity:.2%})"
+            points, details = 15, f"Strong at {return_on_equity:.2%}"
         elif return_on_equity < 0: # Negative ROE
-            score -= 15
-            breakdown["Return on Equity (ROE)"] = f"-15 (Negative at {return_on_equity:.2%})"
+            points, details = -15, f"Negative at {return_on_equity:.2%}"
         else:
-            breakdown["Return on Equity (ROE)"] = f"0 (Neutral at {return_on_equity:.2%})"
+            points, details = 0, f"Neutral at {return_on_equity:.2%}"
+        score += points
+        breakdown["Return on Equity (ROE)"] = {"points": points, "details": details}
     else:
-        breakdown["Return on Equity (ROE)"] = "N/A"
-
+        breakdown["Return on Equity (ROE)"] = {"points": 0, "details": "N/A"}
+    
     # Debt to Equity
     debt_to_equity = company_fundamentals.get('debtToEquity')
     if debt_to_equity is not None and not np.isinf(debt_to_equity):
         if debt_to_equity < DEBT_TO_EQUITY_LOW_THRESHOLD: # e.g., < 0.5
-            score += 10
-            breakdown["Debt to Equity"] = f"+10 (Low Debt at {debt_to_equity:.2f})"
+            points, details = 10, f"Low Debt at {debt_to_equity:.2f}"
         elif debt_to_equity > DEBT_TO_EQUITY_HIGH_THRESHOLD: # e.g., > 1.5
-            score -= 10
-            breakdown["Debt to Equity"] = f"-10 (High Debt at {debt_to_equity:.2f})"
+            points, details = -10, f"High Debt at {debt_to_equity:.2f}"
         else:
-            breakdown["Debt to Equity"] = f"0 (Moderate Debt at {debt_to_equity:.2f})"
+            points, details = 0, f"Moderate Debt at {debt_to_equity:.2f}"
+        score += points
+        breakdown["Debt to Equity"] = {"points": points, "details": details}
     else:
-        breakdown["Debt to Equity"] = "N/A"
-
+        breakdown["Debt to Equity"] = {"points": 0, "details": "N/A"}
+    
     return max(0, min(100, score)), breakdown
 
 def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dict, list]:
@@ -469,24 +475,24 @@ def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dic
     score = 50.0
     breakdown = {}
     alerts = []
-
+    
     if news_sentiment is not None: # Sentiment rule: <0 = Negative, 0-0.1 = Neutral, >0.1 = Positive
         if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
-            score += 20 # Positive impact
+            points = 20 # Positive impact
             alerts.append(f"Notice: Positive news sentiment detected ({news_sentiment:.2f}).")
             sentiment_label = "Positive"
         elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
-            score -= 20 # Negative impact
+            points = -20 # Negative impact
             alerts.append(f"Alert: Negative news sentiment detected ({news_sentiment:.2f}).")
             sentiment_label = "Negative"
         else: # 0.0 to 0.1 (inclusive of 0.0)
+            points = 0
             sentiment_label = "Neutral"
-            pass # Neutral, no score change, no specific alert
-        
-        breakdown["Overall News Sentiment"] = f"{news_sentiment:.2f} ({sentiment_label})"
+        score += points
+        breakdown["Overall News Sentiment"] = {"points": points, "details": f"{news_sentiment:.2f} ({sentiment_label})"}
     else:
-        breakdown["Overall News Sentiment"] = "N/A"
-
+        breakdown["Overall News Sentiment"] = {"points": 0, "details": "N/A"}
+    
     return max(0, min(100, score)), breakdown, alerts
 
 # --- ADVANCED ANALYSIS ---
