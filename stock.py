@@ -89,6 +89,33 @@ EPS_GROWTH_STRONG_THRESHOLD = 0.30
 EPS_GROWTH_NEGATIVE_THRESHOLD = -0.1
 # --- END OF THRESHOLDS ---
 
+# --- Sector-Aware Weighting Configuration ---
+# Weights for combining category scores. Must sum to 1.0 for each sector.
+SECTOR_WEIGHTS = {
+    "Technology": {"technical": 0.35, "fundamental": 0.35, "sentiment": 0.30},
+    "Healthcare": {"technical": 0.25, "fundamental": 0.45, "sentiment": 0.30},
+    "Financial Services": {"technical": 0.30, "fundamental": 0.40, "sentiment": 0.30},
+    "Consumer Cyclical": {"technical": 0.30, "fundamental": 0.30, "sentiment": 0.40},
+    "Industrials": {"technical": 0.40, "fundamental": 0.40, "sentiment": 0.20},
+    "Energy": {"technical": 0.40, "fundamental": 0.20, "sentiment": 0.40},
+    "DEFAULT": {"technical": 0.33, "fundamental": 0.34, "sentiment": 0.33},
+}
+
+# --- Recommendation Bands based on Final Score ---
+def classify_recommendation(final_score: float) -> str:
+    """Classifies a final score into a recommendation string."""
+    if final_score >= 80:
+        return "Strong Buy"
+    elif 60 <= final_score < 80:
+        return "Buy"
+    elif 40 <= final_score < 60:
+        return "Hold"
+    elif 20 <= final_score < 40:
+        return "Sell"
+    else:  # < 20
+        return "Strong Sell"
+
+
 
 
 # --- TECHNICAL INDICATOR CALCULATIONS ---
@@ -256,187 +283,174 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
     else:
         return "Hold", final_confidence, "Mixed or neutral signals: " + "; ".join(reasons)
 
-# --- ADVANCED ANALYSIS ---
-def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technical_indicators: dict,
-                      company_fundamentals: dict, news_sentiment: float,
-                      social_media_sentiment: float, market_news: list) -> tuple:
-    """
-    Performs an enhanced stock analysis combining technical, fundamental, and sentiment data.
-    This version uses a weighted scoring model for a more nuanced recommendation and confidence score.
+# --- CATEGORIZED SCORING ENGINE ---
 
-    Args:
-        stock_symbol (str): The ticker symbol of the stock.
-        historical_data (pd.DataFrame): DataFrame with historical stock data.
-        technical_indicators (dict): Dictionary of calculated technical indicators.
-        company_fundamentals (dict): Dictionary of company fundamental data.
-        news_sentiment (float | None): Overall sentiment score of news.
-        social_media_sentiment (float | None): Sentiment score from social media.
-        market_news (list): List of relevant market news headlines/summaries.
-
-    Returns:
-        tuple: (Recommendation: str, Confidence: int, Alerts: list, Breakdown: dict)
-    """
-    # --- Weighted Scoring Configuration ---
-    SIGNAL_WEIGHTS = {
-        "rsi_oversold": 10,
-        "rsi_overbought": -10,
-        "macd_bullish": 10,
-        "macd_bearish": -10,
-        "sma_cross_bullish": 8,
-        "sma_cross_bearish": -8,
-        "golden_cross": 5,
-        "death_cross": -12,
-        "eps_strong_growth": 15,
-        "eps_significant_decline": -20,
-        "pe_undervalued": 5,
-        "pe_overvalued": -5,
-        "news_strong_positive": 10,
-        "news_mild_positive": 5,
-        "news_mild_negative": -5,
-        "news_strong_negative": -10,
-    }
-
-    raw_score = 50  # Start with a neutral base confidence
+def _calculate_technical_score(technical_indicators: dict, historical_data: pd.DataFrame) -> tuple[float, dict]:
+    """Calculates a normalized technical score (0-100) and provides a breakdown."""
+    score = 50.0
     breakdown = {}
-    alerts = []
 
-    # --- 1. Technical Indicators ---
     rsi_val = technical_indicators.get('RSI')
     if rsi_val is not None:
         if rsi_val < RSI_OVERSOLD_THRESHOLD:
-            raw_score += SIGNAL_WEIGHTS["rsi_oversold"]
-            breakdown["RSI"] = f'+{SIGNAL_WEIGHTS["rsi_oversold"]} (Oversold at {rsi_val:.2f})'
+            score += 15
+            breakdown["RSI"] = f"+15 (Oversold at {rsi_val:.2f})"
         elif rsi_val > RSI_OVERBOUGHT_THRESHOLD:
-            raw_score += SIGNAL_WEIGHTS["rsi_overbought"]
-            breakdown["RSI"] = f'{SIGNAL_WEIGHTS["rsi_overbought"]} (Overbought at {rsi_val:.2f})'
+            score -= 15
+            breakdown["RSI"] = f"-15 (Overbought at {rsi_val:.2f})"
         else:
-            breakdown["RSI"] = f'0 (Neutral at {rsi_val:.2f})'
+            breakdown["RSI"] = f"0 (Neutral at {rsi_val:.2f})"
 
     macd_val = technical_indicators.get('MACD')
     macd_signal_val = technical_indicators.get('MACD_Signal')
-    macd_bullish_crossover = False
     if macd_val is not None and macd_signal_val is not None:
         if macd_val > macd_signal_val:
-            raw_score += SIGNAL_WEIGHTS["macd_bullish"]
-            breakdown["MACD Crossover"] = f'+{SIGNAL_WEIGHTS["macd_bullish"]} (Bullish)'
-            macd_bullish_crossover = True
+            score += 15
+            breakdown["MACD Crossover"] = "+15 (Bullish)"
         elif macd_val < macd_signal_val:
-            raw_score += SIGNAL_WEIGHTS["macd_bearish"]
-            breakdown["MACD Crossover"] = f'{SIGNAL_WEIGHTS["macd_bearish"]} (Bearish)'
-        else:
-            breakdown["MACD Crossover"] = '0 (Neutral)'
+            score -= 15
+            breakdown["MACD Crossover"] = "-15 (Bearish)"
 
     sma_5_val = technical_indicators.get('SMA_5')
     sma_20_val = technical_indicators.get('SMA_20')
     if sma_5_val is not None and sma_20_val is not None:
         if sma_5_val > sma_20_val:
-            raw_score += SIGNAL_WEIGHTS["sma_cross_bullish"]
-            breakdown["Short-term SMA Cross"] = f'+{SIGNAL_WEIGHTS["sma_cross_bullish"]} (Bullish)'
+            score += 10
+            breakdown["Short-term SMA Cross"] = "+10 (Bullish)"
         elif sma_5_val < sma_20_val:
-            raw_score += SIGNAL_WEIGHTS["sma_cross_bearish"]
-            breakdown["Short-term SMA Cross"] = f'{SIGNAL_WEIGHTS["sma_cross_bearish"]} (Bearish)'
+            score -= 10
+            breakdown["Short-term SMA Cross"] = "-10 (Bearish)"
 
     sma_50_val = technical_indicators.get('SMA_50')
     sma_200_val = technical_indicators.get('SMA_200')
-    death_cross_active = False
     if sma_50_val is not None and sma_200_val is not None:
         if sma_50_val > sma_200_val:
-            raw_score += SIGNAL_WEIGHTS["golden_cross"]
-            breakdown["Long-term SMA Cross"] = f'+{SIGNAL_WEIGHTS["golden_cross"]} (Golden Cross)'
+            score += 10
+            breakdown["Long-term SMA Cross"] = "+10 (Golden Cross)"
         else:
-            death_cross_active = True
+            score -= 15
+            breakdown["Long-term SMA Cross"] = "-15 (Death Cross)"
 
-    # --- 2. Company Fundamentals ---
+    return max(0, min(100, score)), breakdown
+
+def _calculate_fundamental_score(company_fundamentals: dict) -> tuple[float, dict]:
+    """Calculates a normalized fundamental score (0-100) and provides a breakdown."""
+    score = 50.0
+    breakdown = {}
+
     pe_ratio = company_fundamentals.get('trailingPE') if company_fundamentals else None
     eps_growth = company_fundamentals.get('earningsGrowth') if company_fundamentals else None
 
     if pe_ratio is not None and not np.isinf(pe_ratio):
         if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD:
-            raw_score += SIGNAL_WEIGHTS["pe_undervalued"]
-            breakdown["P/E Ratio"] = f'+{SIGNAL_WEIGHTS["pe_undervalued"]} (Undervalued at {pe_ratio:.2f})'
+            score += 15
+            breakdown["P/E Ratio"] = f"+15 (Undervalued at {pe_ratio:.2f})"
         elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
-            raw_score += SIGNAL_WEIGHTS["pe_overvalued"]
-            breakdown["P/E Ratio"] = f'{SIGNAL_WEIGHTS["pe_overvalued"]} (Overvalued at {pe_ratio:.2f})'
+            score -= 10
+            breakdown["P/E Ratio"] = f"-10 (Overvalued at {pe_ratio:.2f})"
         else:
-            breakdown["P/E Ratio"] = f'0 (Neutral at {pe_ratio:.2f})'
+            breakdown["P/E Ratio"] = f"0 (Neutral at {pe_ratio:.2f})"
 
-    strong_eps_growth = False
     if eps_growth is not None:
         if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
-            raw_score += SIGNAL_WEIGHTS["eps_strong_growth"]
-            breakdown["EPS Growth"] = f'+{SIGNAL_WEIGHTS["eps_strong_growth"]} (Strong at {eps_growth:.2%})'
-            strong_eps_growth = True
-        elif eps_growth < -0.30:  # Significant decline
-            raw_score += SIGNAL_WEIGHTS["eps_significant_decline"]
-            breakdown["EPS Growth"] = f'{SIGNAL_WEIGHTS["eps_significant_decline"]} (Decline at {eps_growth:.2%})'
+            score += 25
+            breakdown["EPS Growth"] = f"+25 (Strong at {eps_growth:.2%})"
+        elif eps_growth < -0.30:
+            score -= 30
+            breakdown["EPS Growth"] = f"-30 (Decline at {eps_growth:.2%})"
+        elif eps_growth < 0:
+            score -= 15
+            breakdown["EPS Growth"] = f"-15 (Negative at {eps_growth:.2%})"
         else:
-            breakdown["EPS Growth"] = f'0 (Neutral at {eps_growth:.2%})'
+            breakdown["EPS Growth"] = f"0 (Neutral at {eps_growth:.2%})"
 
-    # --- 3. Sentiment Analysis ---
+    return max(0, min(100, score)), breakdown
+
+def _calculate_sentiment_score(news_sentiment: float | None, market_news: list) -> tuple[float, dict, list]:
+    """Calculates a normalized sentiment score (0-100) and provides a breakdown and alerts."""
+    score = 50.0
+    breakdown = {}
+    alerts = []
+
     if news_sentiment is not None:
         if news_sentiment >= 0.3:
-            raw_score += SIGNAL_WEIGHTS["news_strong_positive"]
-            breakdown["News Sentiment"] = f'+{SIGNAL_WEIGHTS["news_strong_positive"]} (Strong Positive)'
+            score += 20
+            breakdown["Overall News Sentiment"] = f"+20 (Strong Positive: {news_sentiment:.2f})"
         elif news_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD:
-            raw_score += SIGNAL_WEIGHTS["news_mild_positive"]
-            breakdown["News Sentiment"] = f'+{SIGNAL_WEIGHTS["news_mild_positive"]} (Mild Positive)'
+            score += 10
+            breakdown["Overall News Sentiment"] = f"+10 (Mild Positive: {news_sentiment:.2f})"
         elif news_sentiment <= -0.3:
-            raw_score += SIGNAL_WEIGHTS["news_strong_negative"]
-            breakdown["News Sentiment"] = f'{SIGNAL_WEIGHTS["news_strong_negative"]} (Strong Negative)'
+            score -= 20
+            breakdown["Overall News Sentiment"] = f"-20 (Strong Negative: {news_sentiment:.2f})"
         elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            raw_score += SIGNAL_WEIGHTS["news_mild_negative"]
-            breakdown["News Sentiment"] = f'{SIGNAL_WEIGHTS["news_mild_negative"]} (Mild Negative)'
+            score -= 10
+            breakdown["Overall News Sentiment"] = f"-10 (Mild Negative: {news_sentiment:.2f})"
         else:
-            breakdown["News Sentiment"] = '0 (Neutral)'
+            breakdown["Overall News Sentiment"] = f"0 (Neutral: {news_sentiment:.2f})"
 
-    # --- 4. Conditional Logic (e.g., Death Cross) ---
-    if death_cross_active:
-        deprioritize = (
-            (rsi_val is not None and rsi_val > RSI_BULLISH_NEUTRAL_THRESHOLD) and
-            macd_bullish_crossover and
-            (news_sentiment is not None and news_sentiment >= NEUTRAL_SENTIMENT_LOWER_BOUND) and
-            strong_eps_growth
-        )
-        if deprioritize:
-            breakdown["Long-term SMA Cross"] = '0 (Death Cross Deprioritized)'
-        else:
-            raw_score += SIGNAL_WEIGHTS["death_cross"]
-            breakdown["Long-term SMA Cross"] = f'{SIGNAL_WEIGHTS["death_cross"]} (Death Cross Active)'
-
-    # --- 5. Market News Keyword Alerts ---
     for news in market_news:
         news_lower = news.lower()
-        if any(keyword in news_lower for keyword in ["risk", "volatility", "uncertainty", "downside"]):
-            alerts.append(f"Alert: Market risk/volatility indicated: '{news}'")
-        if any(keyword in news_lower for keyword in ["drop", "crash", "recession", "bankrupt"]):
-            alerts.append(f"Alert: Potential market downturn mentioned: '{news}'")
         if any(keyword in news_lower for keyword in ["fraud", "scandal", "investigation"]):
             alerts.append(f"Alert: Company-specific negative news: '{news}'")
+            score -= 10  # Apply penalty for critical negative keywords
+            breakdown["Keyword: Investigation"] = "-10"
         if any(keyword in news_lower for keyword in ["growth", "expansion", "profit", "innovat", "ai", "robotaxi", "bullish outlook"]):
             alerts.append(f"Alert: Positive company/market news: '{news}'")
+            score += 5  # Apply bonus for positive keywords
+            breakdown["Keyword: Innovation/Growth"] = "+5"
 
-    # --- 6. Final Recommendation and Confidence Calculation ---
-    raw_score = max(0, min(100, raw_score))  # Clamp score between 0 and 100
+    return max(0, min(100, score)), breakdown, alerts
 
-    # Determine recommendation based on final score
-    if raw_score >= 60:
-        recommendation = "Buy"
-    elif raw_score <= 40:
-        recommendation = "Sell"
-    else:  # 41-59 is the Hold range
-        recommendation = "Hold"
+# --- ADVANCED ANALYSIS ---
+def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technical_indicators: dict,
+                      company_fundamentals: dict, news_sentiment: float | None,
+                      social_media_sentiment: float | None, market_news: list) -> tuple:
+    """
+    Performs an enhanced, categorized, and sector-aware stock analysis.
 
-    # Calculate confidence based on conviction (how far from neutral 50)
-    if recommendation == "Buy":
-        confidence = int((raw_score - 50) * 2)
-    elif recommendation == "Sell":
-        confidence = int((50 - raw_score) * 2)
-    else:  # Hold
-        confidence = int(100 - abs(raw_score - 50) * 2)
+    Returns:
+        tuple: (Recommendation, Confidence, Alerts, Master_Breakdown, Category_Scores)
+    """
+    # 1. Calculate scores for each category
+    tech_score, tech_breakdown = _calculate_technical_score(technical_indicators, historical_data)
+    fund_score, fund_breakdown = _calculate_fundamental_score(company_fundamentals)
+    sent_score, sent_breakdown, alerts = _calculate_sentiment_score(news_sentiment, market_news)
 
-    final_confidence = max(0, min(100, confidence))
+    category_scores = {
+        "Technical": tech_score,
+        "Fundamental": fund_score,
+        "Sentiment": sent_score,
+    }
 
-    return recommendation, final_confidence, alerts, breakdown
+    # 2. Determine sector and apply weights
+    sector = company_fundamentals.get('sector', 'DEFAULT') if company_fundamentals else 'DEFAULT'
+    sector_key = next((k for k in SECTOR_WEIGHTS if k.lower() in sector.lower()), "DEFAULT")
+    weights = SECTOR_WEIGHTS[sector_key]
+
+    # 3. Calculate final weighted score
+    final_score = (
+        tech_score * weights["technical"] +
+        fund_score * weights["fundamental"] +
+        sent_score * weights["sentiment"]
+    )
+
+    # 4. Classify recommendation and set confidence
+    recommendation = classify_recommendation(final_score)
+    confidence = int(final_score)
+
+    # 5. Combine all breakdowns for a full report
+    master_breakdown = {
+        "Technical Analysis": tech_breakdown,
+        "Fundamental Analysis": fund_breakdown,
+        "Sentiment Analysis": sent_breakdown,
+        "Final Score Calculation": {
+            "Sector": sector_key,
+            "Weights": f"T({weights['technical']}), F({weights['fundamental']}), S({weights['sentiment']})",
+            "Final Score": f"{final_score:.2f}"
+        }
+    }
+
+    return recommendation, confidence, alerts, master_breakdown, category_scores
 
 # --- UTILITY FUNCTIONS ---
 def analyze_sentiment(text: str) -> float:
@@ -852,19 +866,27 @@ if __name__ == "__main__":
         # Placeholder for social_media_sentiment - would need integration with a social media API
         social_media_sentiment_placeholder = 0.1 # Example value
 
-        enhanced_recommendation, enhanced_confidence, enhanced_reason, alerts = enhanced_analysis(
+        enhanced_recommendation, enhanced_confidence, alerts, breakdown, category_scores = enhanced_analysis(
             TICKER,
             historical_data,
             technical_indicators,
             company_fundamentals,
             overall_news_sentiment,
             social_media_sentiment_placeholder,
-            combined_news_titles # Using combined news titles for alerts
+            combined_news_titles
         )
 
         print(f"\n--- Enhanced Analysis for {TICKER} ---")
+        print("Category Scores:")
+        for category, score in category_scores.items():
+            print(f"  - {category}: {score:.2f}/100")
+
         print(f"Recommendation: {enhanced_recommendation} (Confidence: {enhanced_confidence}%)")
-        print(f"Reason: {enhanced_reason}")
+        print("Reason Breakdown:")
+        for category, details in breakdown.items():
+            print(f"  - {category}:")
+            for reason, value in details.items():
+                print(f"    - {reason}: {value}")
         if alerts:
             print("Alerts:")
             for alert in alerts:

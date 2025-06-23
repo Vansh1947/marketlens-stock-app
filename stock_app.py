@@ -283,7 +283,7 @@ if st.button("Analyze Stock"):
             # 5. Enhanced Analysis
             st.markdown("---") # Visual separator
             social_media_sentiment_input = None # Explicitly None as it's a placeholder
-            enhanced_recommendation, enhanced_confidence, alerts, breakdown = enhanced_analysis(
+            enhanced_recommendation, enhanced_confidence, alerts, breakdown, category_scores = enhanced_analysis(
                 ticker_symbol_processed,
                 historical_data,
                 technical_indicators,
@@ -293,23 +293,26 @@ if st.button("Analyze Stock"):
                 combined_news_titles
             )
             st.markdown("<h3 style='color: #4682B4;'>✨ Enhanced Analysis</h3>", unsafe_allow_html=True) # Styled subheader
-            st.metric(label="Enhanced Recommendation", value=enhanced_recommendation, help=f"Confidence: {enhanced_confidence}%")
 
+            # Display Category Scores
+            st.markdown("##### Category Scores")
+            cols = st.columns(3)
+            with cols[0]:
+                st.metric("📊 Technical Score", f"{category_scores.get('Technical', 0):.0f}/100")
+            with cols[1]:
+                st.metric("📈 Fundamental Score", f"{category_scores.get('Fundamental', 0):.0f}/100")
+            with cols[2]:
+                st.metric("📰 Sentiment Score", f"{category_scores.get('Sentiment', 0):.0f}/100")
+
+            st.metric(label="Final Recommendation", value=enhanced_recommendation, help=f"Final Score: {enhanced_confidence}")
             # Display the new breakdown for explainability
             with st.expander("Show Confidence Score Breakdown", expanded=True):
-                positive_reasons = {k: v for k, v in breakdown.items() if v.startswith('+')}
-                negative_reasons = {k: v for k, v in breakdown.items() if v.startswith('-')}
-                neutral_reasons = {k: v for k, v in breakdown.items() if not (v.startswith('+') or v.startswith('-'))}
-
-                if positive_reasons:
-                    st.success(f"**Bullish Factors:** {'; '.join([f'{k} ({v})' for k, v in positive_reasons.items()])}")
-                if negative_reasons:
-                    st.error(f"**Bearish Factors:** {'; '.join([f'{k} ({v})' for k, v in negative_reasons.items()])}")
-                if neutral_reasons:
-                    st.info(f"**Neutral Factors:** {'; '.join([f'{k} ({v})' for k, v in neutral_reasons.items()])}")
-
+                 for category, details in breakdown.items():
+                    st.markdown(f"**{category}**")
+                    for reason, value in details.items():
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{reason}:** `{value}`")
             if alerts:
-                st.warning("Heads-up / Alerts:")
+                st.warning("Important News & Alerts:")               
                 for alert in alerts:
                     st.write(f"  - {alert}")
 
@@ -365,17 +368,12 @@ if st.button("Analyze Stock"):
                 st.subheader(f"KEY ANALYSIS SUMMARY FOR {ticker_symbol_processed}")
                 st.metric(label="Final Recommendation", value=enhanced_recommendation)
                 st.metric(label="Confidence Level", value=f"{enhanced_confidence}%")
-                st.markdown("**Primary Reasons (Score Breakdown):**")
-                # Use columns for a nice layout
-                col1, col2 = st.columns(2)
-                items = list(breakdown.items())
-                midpoint = (len(items) + 1) // 2
-                with col1:
-                    for k, v in items[:midpoint]:
-                        st.markdown(f"**{k}:** `{v}`")
-                with col2:
-                    for k, v in items[midpoint:]:
-                        st.markdown(f"**{k}:** `{v}`")
+                st.markdown("**Score Calculation Details:**")
+                final_score_details = breakdown.get("Final Score Calculation", {})
+                st.write(f"**Sector:** {final_score_details.get('Sector', 'N/A')}")
+                st.write(f"**Category Weights:** {final_score_details.get('Weights', 'N/A')}")
+                st.write(f"**Final Weighted Score:** {final_score_details.get('Final Score', 'N/A')}")
+
 
                 if alerts: # Display critical alerts from enhanced analysis again for emphasis
                     st.warning("Important Alerts to Consider (from Enhanced Analysis):")
