@@ -89,6 +89,24 @@ EPS_GROWTH_STRONG_THRESHOLD = 0.30
 EPS_GROWTH_NEGATIVE_THRESHOLD = -0.1
 # --- END OF THRESHOLDS ---
 
+# --- Keyword Impact Configuration for Sentiment Analysis ---
+KEYWORD_IMPACTS = {
+    "fraud": -15,
+    "scandal": -15,
+    "investigation": -10,
+    "lawsuit": -12,
+    "outperform": 8,
+    "acquisition": 7,
+    "growth": 5,
+    "expansion": 5,
+    "profit": 5,
+    "innovat": 7,
+    "ai": 8,
+    "robotaxi": 8,
+    "bullish outlook": 6,
+    "bankruptcy": -20,
+}
+
 # --- Sector-Aware Weighting Configuration ---
 # Weights for combining category scores. Must sum to 1.0 for each sector.
 SECTOR_WEIGHTS = {
@@ -114,6 +132,22 @@ def classify_recommendation(final_score: float) -> str:
         return "Sell"
     else:  # < 20
         return "Strong Sell"
+
+def _calculate_volatility_factor(historical_data: pd.DataFrame) -> float:
+    """
+    Calculates a volatility factor based on the standard deviation of daily returns.
+    Returns a factor between 0 and 1, where 0 means no reduction and 1 means full reduction.
+    """
+    if historical_data.empty or len(historical_data) < 2:
+        return 0.0 # No volatility if no data
+
+    returns = historical_data['Close'].pct_change().dropna()
+    if returns.empty:
+        return 0.0
+
+    std_dev = returns.std()
+    volatility_factor = min(std_dev / 0.02, 0.5) # Max 50% reduction for very high volatility (0.02 is an arbitrary scaling factor)
+    return volatility_factor
 
 
 
@@ -391,13 +425,16 @@ def _calculate_sentiment_score(news_sentiment: float | None, market_news: list) 
     for news in market_news:
         news_lower = news.lower()
         if any(keyword in news_lower for keyword in ["fraud", "scandal", "investigation"]):
-            alerts.append(f"Alert: Company-specific negative news: '{news}'")
-            score -= 10  # Apply penalty for critical negative keywords
-            breakdown["Keyword: Investigation"] = "-10"
-        if any(keyword in news_lower for keyword in ["growth", "expansion", "profit", "innovat", "ai", "robotaxi", "bullish outlook"]):
-            alerts.append(f"Alert: Positive company/market news: '{news}'")
-            score += 5  # Apply bonus for positive keywords
-            breakdown["Keyword: Innovation/Growth"] = "+5"
+            # Use the KEYWORD_IMPACTS dictionary for configurable impacts
+            impact = KEYWORD_IMPACTS.get("investigation", 0) # Default to 0 if not found
+            alerts.append(f"Alert: Company-specific negative news: '{news}'") # Keep alert
+            score += impact
+            breakdown["Keyword: Investigation/Fraud"] = f"{'+' if impact >= 0 else ''}{impact}"
+        for keyword, impact_value in KEYWORD_IMPACTS.items():
+            if keyword in news_lower and keyword not in ["fraud", "scandal", "investigation"]: # Avoid double counting
+                alerts.append(f"Alert: Keyword '{keyword}' detected: '{news}'")
+                score += impact_value
+                breakdown[f"Keyword: {keyword.capitalize()}"] = f"{'+' if impact_value >= 0 else ''}{impact_value}"
 
     return max(0, min(100, score)), breakdown, alerts
 
@@ -435,8 +472,13 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
     )
 
     # 4. Classify recommendation and set confidence
-    recommendation = classify_recommendation(final_score)
-    confidence = int(final_score)
+    # Apply volatility adjustment to the final score
+    volatility_factor = _calculate_volatility_factor(historical_data)
+    adjusted_final_score = final_score * (1 - volatility_factor)
+
+    recommendation = classify_recommendation(adjusted_final_score)
+    # Confidence is now the adjusted final score, clamped to 0-100
+    confidence = int(max(0, min(100, adjusted_final_score)))
 
     # 5. Combine all breakdowns for a full report
     master_breakdown = {
@@ -446,7 +488,9 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         "Final Score Calculation": {
             "Sector": sector_key,
             "Weights": f"T({weights['technical']}), F({weights['fundamental']}), S({weights['sentiment']})",
-            "Final Score": f"{final_score:.2f}"
+            "Raw Final Score": f"{final_score:.2f}",
+            "Volatility Factor Applied": f"{volatility_factor:.2f}",
+            "Adjusted Final Score": f"{adjusted_final_score:.2f}"
         }
     }
 

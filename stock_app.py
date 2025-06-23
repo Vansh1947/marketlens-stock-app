@@ -372,7 +372,9 @@ if st.button("Analyze Stock"):
                 final_score_details = breakdown.get("Final Score Calculation", {})
                 st.write(f"**Sector:** {final_score_details.get('Sector', 'N/A')}")
                 st.write(f"**Category Weights:** {final_score_details.get('Weights', 'N/A')}")
-                st.write(f"**Final Weighted Score:** {final_score_details.get('Final Score', 'N/A')}")
+                st.write(f"**Raw Final Score:** {final_score_details.get('Raw Final Score', 'N/A')}")
+                st.write(f"**Volatility Factor Applied:** {final_score_details.get('Volatility Factor Applied', 'N/A')}")
+                st.write(f"**Adjusted Final Score:** {final_score_details.get('Adjusted Final Score', 'N/A')}")
 
 
                 if alerts: # Display critical alerts from enhanced analysis again for emphasis
