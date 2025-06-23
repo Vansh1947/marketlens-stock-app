@@ -262,243 +262,181 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
                       social_media_sentiment: float, market_news: list) -> tuple:
     """
     Performs an enhanced stock analysis combining technical, fundamental, and sentiment data.
+    This version uses a weighted scoring model for a more nuanced recommendation and confidence score.
 
     Args:
         stock_symbol (str): The ticker symbol of the stock.
         historical_data (pd.DataFrame): DataFrame with historical stock data.
         technical_indicators (dict): Dictionary of calculated technical indicators.
         company_fundamentals (dict): Dictionary of company fundamental data.
-        news_sentiment (float): Sentiment score of news (-1 to 1).
-        social_media_sentiment (float): Sentiment score from social media (-1 to 1).
+        news_sentiment (float | None): Overall sentiment score of news.
+        social_media_sentiment (float | None): Sentiment score from social media.
         market_news (list): List of relevant market news headlines/summaries.
 
     Returns:
-        tuple: (Recommendation: str, Confidence: int, Reason: str, Alerts: list)
+        tuple: (Recommendation: str, Confidence: int, Alerts: list, Breakdown: dict)
     """
-    buy_signals = 0
-    sell_signals = 0
-    hold_signals = 0
-    alerts = []
-    reasons = []
-    confidence_score = 50 # Start with a neutral base confidence
+    # --- Weighted Scoring Configuration ---
+    SIGNAL_WEIGHTS = {
+        "rsi_oversold": 10,
+        "rsi_overbought": -10,
+        "macd_bullish": 10,
+        "macd_bearish": -10,
+        "sma_cross_bullish": 8,
+        "sma_cross_bearish": -8,
+        "golden_cross": 5,
+        "death_cross": -12,
+        "eps_strong_growth": 15,
+        "eps_significant_decline": -20,
+        "pe_undervalued": 5,
+        "pe_overvalued": -5,
+        "news_strong_positive": 10,
+        "news_mild_positive": 5,
+        "news_mild_negative": -5,
+        "news_strong_negative": -10,
+    }
 
-    # Technical Indicators
+    raw_score = 50  # Start with a neutral base confidence
+    breakdown = {}
+    alerts = []
+
+    # --- 1. Technical Indicators ---
     rsi_val = technical_indicators.get('RSI')
     if rsi_val is not None:
         if rsi_val < RSI_OVERSOLD_THRESHOLD:
-            buy_signals += 1
-            reasons.append(f"RSI ({rsi_val:.2f}) oversold")
-            confidence_score += 10 # Adjusted from +15
+            raw_score += SIGNAL_WEIGHTS["rsi_oversold"]
+            breakdown["RSI"] = f'+{SIGNAL_WEIGHTS["rsi_oversold"]} (Oversold at {rsi_val:.2f})'
         elif rsi_val > RSI_OVERBOUGHT_THRESHOLD:
-            sell_signals += 1
-            reasons.append(f"RSI ({rsi_val:.2f}) overbought")
-            confidence_score -= 10 # Negative impact for overbought
-        elif RSI_BULLISH_NEUTRAL_THRESHOLD <= rsi_val <= 65: # Moderate Bullish RSI (55-65)
-            confidence_score += 5
-            reasons.append(f"RSI ({rsi_val:.2f}) indicates moderate bullish strength")
-        elif rsi_val > 65 and rsi_val < RSI_OVERBOUGHT_THRESHOLD: # Still bullish but closer to overbought (65-70)
-            confidence_score += 7 # Adjusted from +10
-            reasons.append(f"RSI ({rsi_val:.2f}) in bullish zone, approaching overbought")
+            raw_score += SIGNAL_WEIGHTS["rsi_overbought"]
+            breakdown["RSI"] = f'{SIGNAL_WEIGHTS["rsi_overbought"]} (Overbought at {rsi_val:.2f})'
         else:
-            hold_signals += 1
-            reasons.append(f"RSI ({rsi_val:.2f}) neutral")
+            breakdown["RSI"] = f'0 (Neutral at {rsi_val:.2f})'
+
     macd_val = technical_indicators.get('MACD')
     macd_signal_val = technical_indicators.get('MACD_Signal')
     macd_bullish_crossover = False
     if macd_val is not None and macd_signal_val is not None:
         if macd_val > macd_signal_val:
-            buy_signals += 1
-            reasons.append("MACD bullish crossover")
-            confidence_score += 10 
+            raw_score += SIGNAL_WEIGHTS["macd_bullish"]
+            breakdown["MACD Crossover"] = f'+{SIGNAL_WEIGHTS["macd_bullish"]} (Bullish)'
             macd_bullish_crossover = True
         elif macd_val < macd_signal_val:
-            sell_signals += 1
-            reasons.append("MACD bearish crossover")
-            confidence_score -= 10 
+            raw_score += SIGNAL_WEIGHTS["macd_bearish"]
+            breakdown["MACD Crossover"] = f'{SIGNAL_WEIGHTS["macd_bearish"]} (Bearish)'
         else:
-            hold_signals += 1
-            reasons.append("MACD neutral")
+            breakdown["MACD Crossover"] = '0 (Neutral)'
 
-    # SMA5 vs SMA20
-    sma_5_val = technical_indicators.get('SMA_5') # Assuming SMA_5 is calculated and available
+    sma_5_val = technical_indicators.get('SMA_5')
     sma_20_val = technical_indicators.get('SMA_20')
     if sma_5_val is not None and sma_20_val is not None:
         if sma_5_val > sma_20_val:
-            buy_signals +=1 
-            reasons.append("SMA_5 > SMA_20 (Short-term bullish)")
-            confidence_score +=10 
+            raw_score += SIGNAL_WEIGHTS["sma_cross_bullish"]
+            breakdown["Short-term SMA Cross"] = f'+{SIGNAL_WEIGHTS["sma_cross_bullish"]} (Bullish)'
         elif sma_5_val < sma_20_val:
-            sell_signals +=1
-            reasons.append("SMA_5 < SMA_20 (Short-term bearish)")
-            confidence_score -=5 
+            raw_score += SIGNAL_WEIGHTS["sma_cross_bearish"]
+            breakdown["Short-term SMA Cross"] = f'{SIGNAL_WEIGHTS["sma_cross_bearish"]} (Bearish)'
 
     sma_50_val = technical_indicators.get('SMA_50')
     sma_200_val = technical_indicators.get('SMA_200')
     death_cross_active = False
     if sma_50_val is not None and sma_200_val is not None:
         if sma_50_val > sma_200_val:
-            buy_signals += 1
-            reasons.append("50-day SMA above 200-day SMA (Golden Cross)")
-            confidence_score += 5 # Golden cross has some positive impact
+            raw_score += SIGNAL_WEIGHTS["golden_cross"]
+            breakdown["Long-term SMA Cross"] = f'+{SIGNAL_WEIGHTS["golden_cross"]} (Golden Cross)'
         else:
-            death_cross_active = True # Potential Death Cross
-            # sell_signals += 1 # We will handle its impact conditionally
-            # reasons.append("50-day SMA below 200-day SMA (Death Cross)") # Add reason later if applied
+            death_cross_active = True
 
-    # Company Fundamentals
-    pe_ratio = None
-    eps_growth = None
-    sector = None
-    if company_fundamentals: 
-        pe_ratio = company_fundamentals.get('trailingPE')
-        eps_growth = company_fundamentals.get('earningsGrowth')
-        sector = company_fundamentals.get('sector') # Attempt to get sector
-    # The rest of the logic handles pe_ratio and eps_growth being None gracefully
-
+    # --- 2. Company Fundamentals ---
+    pe_ratio = company_fundamentals.get('trailingPE') if company_fundamentals else None
+    eps_growth = company_fundamentals.get('earningsGrowth') if company_fundamentals else None
 
     if pe_ratio is not None and not np.isinf(pe_ratio):
-        if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD: # e.g. < 15
-            buy_signals += 1
-            reasons.append(f"Low P/E Ratio ({pe_ratio:.2f})")
-            confidence_score += 5
-            # Check for tech sector context even when undervalued
-            if sector and "technology" in sector.lower() and pe_ratio < 20:
-                reasons.append(f"P/E ({pe_ratio:.2f}) is especially low for Technology sector.")
-                confidence_score += 5
-        elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD: # e.g. > 30
-            # sell_signals += 1 # High P/E for growth stock might be normal
-            reasons.append(f"High P/E Ratio ({pe_ratio:.2f})")
-            confidence_score -= 5 # High P/E is generally a slight negative for confidence
-        else: # P/E is in the neutral range
-            hold_signals += 1
-            reasons.append(f"Neutral P/E Ratio ({pe_ratio:.2f})")
-    else:
-        reasons.append("P/E Ratio not available or infinite.")
+        if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD:
+            raw_score += SIGNAL_WEIGHTS["pe_undervalued"]
+            breakdown["P/E Ratio"] = f'+{SIGNAL_WEIGHTS["pe_undervalued"]} (Undervalued at {pe_ratio:.2f})'
+        elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
+            raw_score += SIGNAL_WEIGHTS["pe_overvalued"]
+            breakdown["P/E Ratio"] = f'{SIGNAL_WEIGHTS["pe_overvalued"]} (Overvalued at {pe_ratio:.2f})'
+        else:
+            breakdown["P/E Ratio"] = f'0 (Neutral at {pe_ratio:.2f})'
 
     strong_eps_growth = False
     if eps_growth is not None:
         if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
-            buy_signals += 1
-            reasons.append(f"Strong EPS Growth ({eps_growth:.2%})")
-            confidence_score += 10 
+            raw_score += SIGNAL_WEIGHTS["eps_strong_growth"]
+            breakdown["EPS Growth"] = f'+{SIGNAL_WEIGHTS["eps_strong_growth"]} (Strong at {eps_growth:.2%})'
             strong_eps_growth = True
-        elif eps_growth < EPS_GROWTH_NEGATIVE_THRESHOLD:
-            sell_signals += 1
-            reasons.append(f"Negative EPS Growth ({eps_growth:.2%})")
-            # Confidence adjustment for very negative EPS growth handled below
+        elif eps_growth < -0.30:  # Significant decline
+            raw_score += SIGNAL_WEIGHTS["eps_significant_decline"]
+            breakdown["EPS Growth"] = f'{SIGNAL_WEIGHTS["eps_significant_decline"]} (Decline at {eps_growth:.2%})'
         else:
-            hold_signals += 1
-            reasons.append(f"Neutral EPS Growth ({eps_growth:.2%})")
-    else:
-        reasons.append("EPS Growth not available.")
+            breakdown["EPS Growth"] = f'0 (Neutral at {eps_growth:.2%})'
 
-    news_is_neutral_or_positive = False
-    news_sentiment_value_for_logic = 0.0 # Default to neutral if None
+    # --- 3. Sentiment Analysis ---
     if news_sentiment is not None:
-        news_sentiment_value_for_logic = news_sentiment
+        if news_sentiment >= 0.3:
+            raw_score += SIGNAL_WEIGHTS["news_strong_positive"]
+            breakdown["News Sentiment"] = f'+{SIGNAL_WEIGHTS["news_strong_positive"]} (Strong Positive)'
+        elif news_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD:
+            raw_score += SIGNAL_WEIGHTS["news_mild_positive"]
+            breakdown["News Sentiment"] = f'+{SIGNAL_WEIGHTS["news_mild_positive"]} (Mild Positive)'
+        elif news_sentiment <= -0.3:
+            raw_score += SIGNAL_WEIGHTS["news_strong_negative"]
+            breakdown["News Sentiment"] = f'{SIGNAL_WEIGHTS["news_strong_negative"]} (Strong Negative)'
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+            raw_score += SIGNAL_WEIGHTS["news_mild_negative"]
+            breakdown["News Sentiment"] = f'{SIGNAL_WEIGHTS["news_mild_negative"]} (Mild Negative)'
+        else:
+            breakdown["News Sentiment"] = '0 (Neutral)'
 
-    # Specific penalty for very negative EPS growth
-    if eps_growth is not None and eps_growth < -0.30: # e.g., less than -30%
-        reasons.append(f"Significant EPS Decline ({eps_growth:.2%}) heavily impacts outlook.")
-        confidence_score -= 20 # Adjusted from -25, still a major penalty
-
-    # News Sentiment
-    if news_sentiment is not None:
-        if news_sentiment >= POSITIVE_SENTIMENT_THRESHOLD: # >= 0.25
-            buy_signals += 1
-            reasons.append(f"Positive news sentiment ({news_sentiment:.2f})")
-            confidence_score += 10 # Adjusted from +15
-            news_is_neutral_or_positive = True
-        elif news_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD: # >= 0.10
-            buy_signals += 0.5 # Or consider it a weaker buy signal
-            reasons.append(f"Slightly positive news sentiment ({news_sentiment:.2f})")
-            confidence_score += 5 
-            news_is_neutral_or_positive = True
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < -0.10
-            sell_signals += 1
-            reasons.append(f"Negative news sentiment ({news_sentiment:.2f})")
-            confidence_score -= 5 
-        else: # Neutral (-0.10 <= sentiment < 0.10)
-            hold_signals += 1
-            reasons.append(f"Neutral news sentiment ({news_sentiment:.2f})")
-            news_is_neutral_or_positive = True # Neutral is also counted for deprioritizing death cross
-    else:
-        reasons.append("News sentiment not available.")
-
-    # Deprioritize Death Cross for growth stocks
+    # --- 4. Conditional Logic (e.g., Death Cross) ---
     if death_cross_active:
-        # Conditions to deprioritize: RSI > 55, MACD bullish, News Neutral/Positive, Strong EPS Growth
         deprioritize = (
             (rsi_val is not None and rsi_val > RSI_BULLISH_NEUTRAL_THRESHOLD) and
-            macd_bullish_crossover and # MACD must be bullish
-            (news_sentiment_value_for_logic >= NEUTRAL_SENTIMENT_LOWER_BOUND) and # News is neutral or positive
+            macd_bullish_crossover and
+            (news_sentiment is not None and news_sentiment >= NEUTRAL_SENTIMENT_LOWER_BOUND) and
             strong_eps_growth
         )
         if deprioritize:
-            reasons.append("Death Cross observed but deprioritized due to strong growth signals.")
-            # No confidence penalty if deprioritized, maybe even a slight positive for resilience
-            # confidence_score += 0 
+            breakdown["Long-term SMA Cross"] = '0 (Death Cross Deprioritized)'
         else:
-            sell_signals += 1
-            reasons.append("50-day SMA below 200-day SMA (Death Cross)")
-            confidence_score -= 10 # Stronger penalty for active, non-deprioritized Death Cross
+            raw_score += SIGNAL_WEIGHTS["death_cross"]
+            breakdown["Long-term SMA Cross"] = f'{SIGNAL_WEIGHTS["death_cross"]} (Death Cross Active)'
 
-    # Social Media Sentiment (Placeholder - requires external integration)
-    if social_media_sentiment is not None:
-        # Using the new sentiment scale for consistency
-        if social_media_sentiment >= POSITIVE_SENTIMENT_THRESHOLD:
-            buy_signals += 0.5 # Social media might be weighted less
-            reasons.append(f"Positive social media sentiment ({social_media_sentiment:.2f})")
-            confidence_score += 5
-        elif social_media_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD:
-            reasons.append(f"Slightly positive social media sentiment ({social_media_sentiment:.2f})")
-            confidence_score += 3
-        elif social_media_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            sell_signals += 0.5
-            reasons.append(f"Negative social media sentiment ({social_media_sentiment:.2f})")
-            confidence_score -= 5
-        else: # Neutral
-            reasons.append(f"Neutral social media sentiment ({social_media_sentiment:.2f})")
-    else:
-        reasons.append("Social media sentiment not available.")
-
-    # Market News Alerts
+    # --- 5. Market News Keyword Alerts ---
     for news in market_news:
-        # Simplified keyword matching for alerts
-        if any(keyword in news.lower() for keyword in ["risk", "volatility", "uncertainty", "downside"]):
+        news_lower = news.lower()
+        if any(keyword in news_lower for keyword in ["risk", "volatility", "uncertainty", "downside"]):
             alerts.append(f"Alert: Market risk/volatility indicated: '{news}'")
-        if any(keyword in news.lower() for keyword in ["drop", "crash", "recession", "bankrupt"]):
+        if any(keyword in news_lower for keyword in ["drop", "crash", "recession", "bankrupt"]):
             alerts.append(f"Alert: Potential market downturn mentioned: '{news}'")
-        if any(keyword in news.lower() for keyword in ["fraud", "scandal", "investigation"]):
+        if any(keyword in news_lower for keyword in ["fraud", "scandal", "investigation"]):
             alerts.append(f"Alert: Company-specific negative news: '{news}'")
-        if any(keyword in news.lower() for keyword in ["growth", "expansion", "profit", "innovat"]):
+        if any(keyword in news_lower for keyword in ["growth", "expansion", "profit", "innovat", "ai", "robotaxi", "bullish outlook"]):
             alerts.append(f"Alert: Positive company/market news: '{news}'")
 
-    total_signals = buy_signals + sell_signals + hold_signals
-    if total_signals == 0:
-        return "Hold", 0, "No conclusive signals from available data.", alerts
+    # --- 6. Final Recommendation and Confidence Calculation ---
+    raw_score = max(0, min(100, raw_score))  # Clamp score between 0 and 100
 
-    # Cap the raw score to be within a 0-100 range before calculating final confidence
-    raw_score = max(0, min(confidence_score, 100))
-
-    # Determine recommendation based on signal counts
-    if buy_signals > sell_signals and buy_signals >= hold_signals:
+    # Determine recommendation based on final score
+    if raw_score >= 60:
         recommendation = "Buy"
-        # Confidence is how far the score is above neutral (50)
-        final_confidence = int((raw_score - 50) * 2) if raw_score > 50 else 0
-    elif sell_signals > buy_signals and sell_signals >= hold_signals:
+    elif raw_score <= 40:
         recommendation = "Sell"
-        # Confidence is how far the score is below neutral (50)
-        final_confidence = int((50 - raw_score) * 2) if raw_score < 50 else 0
-    else: # hold_signals are dominant or signals are very mixed
+    else:  # 41-59 is the Hold range
         recommendation = "Hold"
-        # Confidence is how close the score is to neutral (50)
-        final_confidence = int(100 - abs(raw_score - 50) * 2)
 
-    # Ensure confidence is always within the 0-100 range after calculation
-    final_confidence = max(0, min(final_confidence, 100))
+    # Calculate confidence based on conviction (how far from neutral 50)
+    if recommendation == "Buy":
+        confidence = int((raw_score - 50) * 2)
+    elif recommendation == "Sell":
+        confidence = int((50 - raw_score) * 2)
+    else:  # Hold
+        confidence = int(100 - abs(raw_score - 50) * 2)
 
-    return recommendation, final_confidence, f"Recommendation based on weighted analysis: {'; '.join(reasons)}", alerts
+    final_confidence = max(0, min(100, confidence))
+
+    return recommendation, final_confidence, alerts, breakdown
 
 # --- UTILITY FUNCTIONS ---
 def analyze_sentiment(text: str) -> float:

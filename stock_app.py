@@ -283,7 +283,7 @@ if st.button("Analyze Stock"):
             # 5. Enhanced Analysis
             st.markdown("---") # Visual separator
             social_media_sentiment_input = None # Explicitly None as it's a placeholder
-            enhanced_recommendation, enhanced_confidence, enhanced_reason, alerts = enhanced_analysis(
+            enhanced_recommendation, enhanced_confidence, alerts, breakdown = enhanced_analysis(
                 ticker_symbol_processed,
                 historical_data,
                 technical_indicators,
@@ -293,14 +293,25 @@ if st.button("Analyze Stock"):
                 combined_news_titles
             )
             st.markdown("<h3 style='color: #4682B4;'>✨ Enhanced Analysis</h3>", unsafe_allow_html=True) # Styled subheader
-            st.metric(label="Enhanced Recommendation", value=f"{enhanced_recommendation}", help=f"Confidence: {enhanced_confidence}%")
-            st.write(f"**Reason:** {enhanced_reason}")
+            st.metric(label="Enhanced Recommendation", value=enhanced_recommendation, help=f"Confidence: {enhanced_confidence}%")
+
+            # Display the new breakdown for explainability
+            with st.expander("Show Confidence Score Breakdown", expanded=True):
+                positive_reasons = {k: v for k, v in breakdown.items() if v.startswith('+')}
+                negative_reasons = {k: v for k, v in breakdown.items() if v.startswith('-')}
+                neutral_reasons = {k: v for k, v in breakdown.items() if not (v.startswith('+') or v.startswith('-'))}
+
+                if positive_reasons:
+                    st.success(f"**Bullish Factors:** {'; '.join([f'{k} ({v})' for k, v in positive_reasons.items()])}")
+                if negative_reasons:
+                    st.error(f"**Bearish Factors:** {'; '.join([f'{k} ({v})' for k, v in negative_reasons.items()])}")
+                if neutral_reasons:
+                    st.info(f"**Neutral Factors:** {'; '.join([f'{k} ({v})' for k, v in neutral_reasons.items()])}")
+
             if alerts:
-                st.warning("Alerts:")
+                st.warning("Heads-up / Alerts:")
                 for alert in alerts:
                     st.write(f"  - {alert}")
-            else:
-                st.write("No specific alerts.")
 
             # Financial Event Impact Analysis
             st.markdown("---") # Visual separator
@@ -354,8 +365,18 @@ if st.button("Analyze Stock"):
                 st.subheader(f"KEY ANALYSIS SUMMARY FOR {ticker_symbol_processed}")
                 st.metric(label="Final Recommendation", value=enhanced_recommendation)
                 st.metric(label="Confidence Level", value=f"{enhanced_confidence}%")
-                st.markdown("**Primary Reasons:**") # Use markdown for consistency
-                st.write(enhanced_reason) # Write the reason
+                st.markdown("**Primary Reasons (Score Breakdown):**")
+                # Use columns for a nice layout
+                col1, col2 = st.columns(2)
+                items = list(breakdown.items())
+                midpoint = (len(items) + 1) // 2
+                with col1:
+                    for k, v in items[:midpoint]:
+                        st.markdown(f"**{k}:** `{v}`")
+                with col2:
+                    for k, v in items[midpoint:]:
+                        st.markdown(f"**{k}:** `{v}`")
+
                 if alerts: # Display critical alerts from enhanced analysis again for emphasis
                     st.warning("Important Alerts to Consider (from Enhanced Analysis):")
                     for alert in alerts:
