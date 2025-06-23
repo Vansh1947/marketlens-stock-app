@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import sys # Add this import
 st.set_page_config(
-    page_title="MarketLens - Stock Analysis",
+    page_title="MarketLens - Stock Analysis", # Changed from "MarketLens - Stock Analysis"
     page_icon="🔍",  # Lens emoji or 📈
     layout="wide",
     initial_sidebar_state="expanded"
@@ -11,8 +11,9 @@ st.set_page_config(
 # Import all your functions from stock.py
 # Assuming stock.py is in the same directory or accessible via PYTHONPATH
 from stock import (
-    get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
-    fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis, extract_financial_events, assess_impact, generate_signal
+    get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi, # Changed from get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi
+    fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis,
+    extract_financial_events, assess_impact, generate_signal
 )
 import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
@@ -250,7 +251,6 @@ if st.button("Analyze Stock"):
 
             # De-duplicate news titles
             if combined_news_titles:
-                seen_titles = set()
                 unique_titles = list(dict.fromkeys(combined_news_titles)) # More efficient deduplication
                 combined_news_titles = unique_titles
 
@@ -282,31 +282,13 @@ if st.button("Analyze Stock"):
 
             # 5. Enhanced Analysis (Simplified)
             st.markdown("---")  # Visual separator
-            social_media_sentiment_input = None  # Explicitly None as it's a placeholder
             enhanced_recommendation, confidence_level, alerts, breakdown, category_scores, final_score_value = enhanced_analysis(
-                ticker_symbol_processed,
                 historical_data,
                 technical_indicators,
                 company_fundamentals,
-                overall_news_sentiment,
-                social_media_sentiment_input,
-                combined_news_titles
+                overall_news_sentiment
             )
             st.markdown("<h3 style='color: #4682B4;'>✨ Enhanced Analysis</h3>", unsafe_allow_html=True)  # Styled subheader
-
-            if combined_news_titles:
-                news_item_for_event_analysis = combined_news_titles[0] # Use the first actual news title
-                is_sample_news_for_event_analysis = False
-            else:
-                # No live news was fetched. Since we are in a block where historical_data is valid,
-                # we can use a sample snippet for demonstration.
-                is_sample_news_for_event_analysis = True
-                news_item_for_event_analysis = f"""
-                {ticker_symbol_processed} reported mixed Q2 results. While revenue saw a slight increase,
-                net profit declined due to rising operational costs. The company announced a
-                new strategic partnership aimed at expanding into new markets and is also
-                exploring cost-cutting measures.
-                """ # This sample news is now just for context, not for analysis
 
             # Display Category Scores
             st.markdown("##### Category Scores")
@@ -336,13 +318,37 @@ if st.button("Analyze Stock"):
                     st.write(f"  - {alert}")
 
             st.markdown("---") # Visual separator
+
+            # --- Financial Event Impact Analysis ---
+            st.markdown("<h3 style='color: #4682B4;'>📰 Financial Event Impact Analysis</h3>", unsafe_allow_html=True)
+            if combined_news_titles:
+                # Use the first news title for event analysis as an example
+                news_item_for_event_analysis = combined_news_titles[0]
+                sentiment_for_event = analyze_sentiment(news_item_for_event_analysis)
+                events = extract_financial_events(news_item_for_event_analysis)
+                impact, event_alerts = assess_impact(events, sentiment_for_event)
+                event_signal = generate_signal(impact)
+
+                st.write(f"Analyzing News Snippet: {news_item_for_event_analysis}")
+                st.write("Note: Event analysis is based on the news title/snippet. Full article content would provide deeper insights.")
+                st.write(f"**Identified Events:** {events if events else 'None'}")
+                st.write(f"**Sentiment of this News:** {sentiment_for_event:.2f}")
+                st.write(f"**Assessed Short-Term Impact:** {impact['short_term']}")
+                st.write(f"**Event-based Signal:** {event_signal}")
+
+                if event_alerts:
+                    st.warning("Event-Specific Alerts: " + " ".join(event_alerts))
+            else:
+                st.info("No news titles available to perform financial event impact analysis.")
+
+            st.markdown("---") # Visual separator
             # --- KEY ANALYSIS SUMMARY ---
             with st.container(border=True):
                 st.subheader(f"KEY ANALYSIS SUMMARY FOR {ticker_symbol_processed}")
                 st.metric(label="Final Recommendation", value=enhanced_recommendation)
                 st.metric(label="Confidence Level", value=f"{confidence_level}%")
                 # Simplified score calculation details
-                st.markdown(f"**Final Score Value (Weighted Average):** {final_score_value:.2f}")
+                st.markdown(f"**Final Score Value (Weighted Average):** {final_score_value:.2f}") # Changed from **Final Score Value (Weighted Average):** {final_score_value:.2f}
 
                 if alerts: # Display critical alerts from enhanced analysis again for emphasis
                     st.warning("Important Alerts to Consider (from Enhanced Analysis):")
