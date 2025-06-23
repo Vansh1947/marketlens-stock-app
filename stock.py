@@ -103,22 +103,80 @@ def classify_recommendation(final_score: float) -> str:
     else:  # < 20
         return "Strong Sell"
 
-def _calculate_confidence_level(category_scores: dict) -> int:
+def _calculate_confidence_level(technical_indicators: dict, company_fundamentals: dict, news_sentiment: float | None) -> int:
     """
-    Calculates the confidence level based on signal alignment and volatility.
-    Confidence reflects how certain the model is about its recommendation.
+    Calculates a confidence level based on a weighted sum of individual indicator contributions.
+    The score is normalized to a 0-100 range, where 50 is neutral, 100 is strong buy confidence,
+    and 0 is strong sell confidence.
     """
-    # Confidence based on signal alignment (how far each category score is from neutral 50)
-    # Max deviation for one score is 50 (0 or 100). For 3 scores, max sum of deviations is 150.
-    # A higher sum of absolute deviations means stronger, more aligned signals.
-    # Divide by 150 (max possible deviation) to normalize to 0-1.
-    # Then multiply by 100 for percentage.
-    signal_alignment_score = sum([abs(score - 50) for score in category_scores.values()]) / 150
+    confidence_raw_score = 0
 
-    # Confidence is directly proportional to signal alignment.
-    # A score of 50 (neutral) for all categories means 0 alignment, 0 confidence.
-    # A score of 0 or 100 for all categories means 100% alignment, 100% confidence.
-    confidence_level = int(signal_alignment_score * 100)
+    # Technical Indicators Contributions
+    sma_5 = technical_indicators.get('SMA_5')
+    sma_20 = technical_indicators.get('SMA_20')
+    if sma_5 is not None and sma_20 is not None:
+        if sma_5 > sma_20:
+            confidence_raw_score += 10 # Bullish short-term cross
+        elif sma_5 < sma_20:
+            confidence_raw_score -= 10 # Bearish short-term cross
+
+    sma_50 = technical_indicators.get('SMA_50')
+    sma_200 = technical_indicators.get('SMA_200')
+    if sma_50 is not None and sma_200 is not None:
+        if sma_50 > sma_200:
+            confidence_raw_score += 15 # Golden Cross (strong bullish)
+        elif sma_50 < sma_200:
+            confidence_raw_score -= 15 # Death Cross (strong bearish)
+
+    rsi_val = technical_indicators.get('RSI')
+    if rsi_val is not None:
+        if rsi_val < RSI_OVERSOLD_THRESHOLD:
+            confidence_raw_score += 10 # Oversold (bullish)
+        elif rsi_val > RSI_OVERBOUGHT_THRESHOLD:
+            confidence_raw_score -= 10 # Overbought (bearish)
+
+    macd_val = technical_indicators.get('MACD')
+    macd_signal_val = technical_indicators.get('MACD_Signal')
+    if macd_val is not None and macd_signal_val is not None:
+        if macd_val > macd_signal_val:
+            confidence_raw_score += 10 # Bullish MACD crossover
+        elif macd_val < macd_signal_val:
+            confidence_raw_score -= 10 # Bearish MACD crossover
+
+    # Fundamental Indicators Contributions
+    pe_ratio = company_fundamentals.get('trailingPE')
+    if pe_ratio is not None and not np.isinf(pe_ratio):
+        if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD:
+            confidence_raw_score += 10 # Undervalued P/E
+        elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
+            confidence_raw_score -= 10 # Overvalued P/E
+
+    eps_growth = company_fundamentals.get('earningsGrowth')
+    if eps_growth is not None:
+        if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
+            confidence_raw_score += 15 # Strong EPS Growth
+        elif eps_growth < EPS_GROWTH_NEGATIVE_THRESHOLD:
+            confidence_raw_score -= 15 # Negative EPS Growth
+
+    # Sentiment Contribution
+    if news_sentiment is not None:
+        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
+            confidence_raw_score += 10 # Positive news
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
+            confidence_raw_score -= 10 # Negative news
+
+    # Normalize the raw score to a 0-100 range.
+    # Max theoretical positive contribution: 10+15+10+10 (tech) + 10+15 (fund) + 10 (sent) = 80
+    # Max theoretical negative contribution: -10-15-10-10 (tech) -10-15 (fund) -10 (sent) = -80
+    # So, the raw score range is approximately -80 to +80.
+    # We map this to 0-100 where 0 is -80, 50 is 0, and 100 is +80.
+    # Formula: (score - min_raw_score) / (max_raw_score - min_raw_score) * 100
+    # (confidence_raw_score - (-80)) / (80 - (-80)) * 100
+    # (confidence_raw_score + 80) / 160 * 100
+    
+    # Clamp the raw score to the expected range before normalization to prevent extreme values
+    clamped_raw_score = max(-80, min(80, confidence_raw_score))
+    confidence_level = int((clamped_raw_score + 80) / 160 * 100)
     return max(0, min(100, confidence_level)) # Clamp between 0 and 100
 
 # --- TECHNICAL INDICATOR CALCULATIONS ---
@@ -376,28 +434,18 @@ def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dic
     alerts = []
 
     if news_sentiment is not None:
-        if news_sentiment >= 0.3:
-            score += 15 # Strong positive impact
-            alerts.append(f"Alert: Strong positive news sentiment ({news_sentiment:.2f}).")
-        elif news_sentiment >= SLIGHTLY_POSITIVE_SENTIMENT_THRESHOLD:
-            score += 5 # Mild positive impact
-        elif news_sentiment <= -0.3:
-            score -= 15 # Strong negative impact
-            alerts.append(f"Alert: Strong negative news sentiment ({news_sentiment:.2f}).")
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            score -= 5 # Mild negative impact
+        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
+            score += 20 # Strong positive impact
+            alerts.append(f"Notice: Strong positive news sentiment detected ({news_sentiment:.2f}).")
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
+            score -= 20 # Strong negative impact
+            alerts.append(f"Alert: Strong negative news sentiment detected ({news_sentiment:.2f}).")
+        else: # 0.0 to 0.1 (inclusive of 0.0)
+            pass # Neutral, no score change, no specific alert
         
-        # Always add overall news sentiment to breakdown
-        breakdown["Overall News Sentiment"] = f"{score - 50:+.0f} (Score: {news_sentiment:.2f})"
+        breakdown["Overall News Sentiment"] = f"{news_sentiment:.2f}"
     else:
-        breakdown["Overall News Sentiment"] = "0 (Not Available)"
-
-    # Simplified alerts based on overall sentiment
-    if news_sentiment is not None:
-        if news_sentiment >= POSITIVE_SENTIMENT_THRESHOLD:
-            alerts.append("Overall news sentiment is positive.")
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            alerts.append("Overall news sentiment is negative.")
+        breakdown["Overall News Sentiment"] = "N/A"
 
     return max(0, min(100, score)), breakdown, alerts
 
@@ -425,18 +473,14 @@ def enhanced_analysis(historical_data: pd.DataFrame, technical_indicators: dict,
     final_score_value = (tech_score + fund_score + sent_score) / 3
 
     # 3. Classify recommendation and calculate confidence
-    recommendation = classify_recommendation(final_score_value)
-    confidence_level = _calculate_confidence_level(category_scores, historical_data) # Volatility removed from here
+    recommendation = classify_recommendation(final_score_value) # This uses the final_score_value
+    confidence_level = _calculate_confidence_level(technical_indicators, company_fundamentals, news_sentiment)
 
     # 4. Combine all breakdowns for a full report
     master_breakdown = {
         "Technical Analysis": tech_breakdown,
         "Fundamental Analysis": fund_breakdown,
         "Sentiment Analysis": sent_breakdown,
-        "Final Score Calculation": {
-            "Final Score Value (Weighted Average)": f"{final_score_value:.2f}",
-            "Confidence Level": f"{confidence_level}%"
-        }
     }
 
     return recommendation, confidence_level, alerts, master_breakdown, category_scores, final_score_value
@@ -596,125 +640,6 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> 
     except Exception as e:
         print(f"Error fetching or processing GNews for {ticker_symbol}: {e}")
         return None, []
-
-def extract_financial_events(content: str) -> list[str]:
-    """
-    Extracts potential financial events from text content.
-
-    Args:
-        content (str): The text content to analyze.
-
-    Returns:
-        list: A list of identified financial event types.
-    """
-    events = []
-    content_lower = content.lower()
-    if "earnings" in content_lower or "quarterly results" in content_lower or "revenue" in content_lower or "profit" in content_lower:
-        events.append("Earnings Report")
-    if "merger" in content_lower or "acquisition" in content_lower or "takeover" in content_lower:
-        events.append("Merger/Acquisition")
-    if "layoff" in content_lower or "job cuts" in content_lower or "restructuring" in content_lower:
-        events.append("Layoffs/Restructuring")
-    if "dividend" in content_lower:
-        events.append("Dividend Announcement")
-    if "product launch" in content_lower or "innovation" in content_lower or "new technology" in content_lower:
-        events.append("Product/Innovation News")
-    if "lawsuit" in content_lower or "regulatory" in content_lower or "fine" in content_lower:
-        events.append("Legal/Regulatory Issue")
-    return events
-
-def assess_impact(events: list[str], sentiment: float) -> tuple[dict, list[str]]:
-    """
-    Assesses the potential short-term and long-term impact of financial events
-    based on their sentiment.
-
-    Args:
-        events (list): A list of identified financial event types.
-        sentiment (float): The sentiment score associated with the events (-1 to 1).
-
-    Returns:
-        tuple: (Impact dictionary: dict, Alerts list: list)
-               Impact dictionary has 'short_term' and 'long_term' keys.
-    """
-    impact = {"short_term": "Neutral", "long_term": "Neutral"}
-    alerts = []
-
-    # Prioritize specific events
-    if "Legal/Regulatory Issue" in events:
-        if sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Highly Negative"
-            impact["long_term"] = "Potentially Negative"
-            alerts.append("Alert: Legal/Regulatory issue with negative sentiment. High risk.")
-        elif sentiment > POSITIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Neutral"
-            impact["long_term"] = "Neutral"
-            alerts.append("Legal/Regulatory issue: Resolved or positive outcome implied.")
-        else:
-            alerts.append("Legal/Regulatory issue: Unclear impact, requires close monitoring.")
-        return impact, alerts # Override other impacts if this is present
-
-    if "Earnings Report" in events:
-        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Positive"
-            impact["long_term"] = "Positive"
-            alerts.append("Earnings Beat: Positive outlook.")
-        elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Negative"
-            impact["long_term"] = "Negative"
-            alerts.append("Earnings Miss: Negative outlook.")
-        else:
-            alerts.append("Earnings Report: Neutral sentiment.")
-
-    if "Merger/Acquisition" in events:
-        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Positive"
-            impact["long_term"] = "Positive"
-            alerts.append("Merger/Acquisition: Potentially positive for growth.")
-        elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Negative"
-            impact["long_term"] = "Negative"
-            alerts.append("Merger/Acquisition: Potentially negative (e.g., overpayment, integration issues).")
-        else:
-            alerts.append("Merger/Acquisition: Mixed sentiment, watch for details.")
-
-    if "Layoffs/Restructuring" in events:
-        if sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Negative"
-            impact["long_term"] = "Negative"
-            alerts.append("Layoffs/Restructuring: Indicates potential issues or cost-cutting.")
-        elif sentiment > POSITIVE_SENTIMENT_THRESHOLD: # Sometimes layoffs are seen positively for efficiency
-            impact["short_term"] = "Neutral to Positive"
-            impact["long_term"] = "Neutral to Positive"
-            alerts.append("Layoffs/Restructuring: Market views as positive for efficiency.")
-        else:
-            alerts.append("Layoffs/Restructuring: Neutral sentiment, requires further analysis.")
-
-    if "Product/Innovation News" in events:
-        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
-            impact["short_term"] = "Positive"
-            impact["long_term"] = "Positive"
-            alerts.append("New Product/Innovation: Potential for future growth.")
-        else:
-            alerts.append("Product/Innovation News: Watch for market adoption and reception.")
-
-    return impact, alerts
-
-def generate_signal(impact: dict) -> str:
-    """
-    Generates a simple 'Buy', 'Sell', or 'Hold' signal based on impact assessment.
-
-    Args:
-        impact (dict): Dictionary with 'short_term' and 'long_term' impact.
-
-    Returns:
-        str: 'Buy', 'Sell', or 'Hold'.
-    """
-    if "Highly Negative" in impact.values() or "Negative" in impact.values():
-        return 'Sell'
-    elif "Positive" in impact.values() or "Neutral to Positive" in impact.values():
-        return 'Buy'
-    else:
-        return 'Hold'
 
 def get_stock_data(ticker_symbol: str) -> tuple[pd.DataFrame | None, float | None, dict | None, str | None]:
     """

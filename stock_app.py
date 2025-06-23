@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import sys # Add this import
 st.set_page_config(
-    page_title="MarketLens - Stock Analysis", # Changed from "MarketLens - Stock Analysis"
+    page_title="MarketLens - Stock Analysis",
     page_icon="🔍",  # Lens emoji or 📈
     layout="wide",
     initial_sidebar_state="expanded"
@@ -10,10 +10,8 @@ st.set_page_config(
 
 # Import all your functions from stock.py
 # Assuming stock.py is in the same directory or accessible via PYTHONPATH
-from stock import (
-    get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi, # Changed from get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi
+from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
     fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis,
-    extract_financial_events, assess_impact, generate_signal
 )
 import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
@@ -211,14 +209,14 @@ if st.button("Analyze Stock"):
             st.markdown("---") # Visual separator
             with st.expander("⚙️ Technical Indicators (Last Values)", expanded=False): # Added emoji
                 technical_indicators = calculate_technical_indicators(historical_data)
-                if technical_indicators:
-                    for k, v in technical_indicators.items():
-                        if v is not None:
-                            st.write(f"{k}: {v:.2f}")
-                        else:
-                            st.write(f"{k}: Not enough data")
-                else:
-                    st.write("Technical indicators skipped (pandas-ta not available or insufficient data).")
+                st.write(f"**SMA_5:** {technical_indicators.get('SMA_5', 'N/A'):.2f}")
+                st.write(f"**SMA_20:** {technical_indicators.get('SMA_20', 'N/A'):.2f}")
+                st.write(f"**RSI:** {technical_indicators.get('RSI', 'N/A'):.2f}")
+                
+                macd_val = technical_indicators.get('MACD')
+                macd_signal_val = technical_indicators.get('MACD_Signal')
+                if macd_val is not None and macd_signal_val is not None:
+                    st.write(f"**MACD:** {macd_val:.2f} (Signal: {macd_signal_val:.2f})")
 
 
             # 3. Fetch News Sentiment (from NewsAPI and GNews)
@@ -290,8 +288,6 @@ if st.button("Analyze Stock"):
             )
             st.markdown("<h3 style='color: #4682B4;'>✨ Enhanced Analysis</h3>", unsafe_allow_html=True)  # Styled subheader
 
-            # Display Category Scores
-            st.markdown("##### Category Scores")
             cols = st.columns(3)
             with cols[0]:
                 st.metric("📊 Technical Score", f"{category_scores.get('Technical', 0):.0f}/100")
@@ -300,55 +296,56 @@ if st.button("Analyze Stock"):
             with cols[2]:
                 st.metric("📰 Sentiment Score", f"{category_scores.get('Sentiment', 0):.0f}/100")
 
-            st.metric(label="Final Recommendation", value=enhanced_recommendation, help=f"Final Score Value: {final_score_value:.2f}")
+            st.metric(label="Final Recommendation", value=enhanced_recommendation)
+            st.metric(label="Confidence Level", value=f"{confidence_level}%")
 
-            # Display the new breakdown for explainability
-            with st.expander("Show Confidence Score Breakdown", expanded=True):
+            # Detailed Analysis Breakdown (collapsible)
+            with st.expander("Detailed Analysis Breakdown", expanded=False):
                 for category, details in breakdown.items():
-                    # Exclude the "Final Score Calculation" details from this specific breakdown view
-                    if category == "Final Score Calculation":
-                        continue
                     st.markdown(f"**{category}**")
                     for reason, value in details.items():
                         st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{reason}:** `{value}`")
 
             if alerts:
-                st.warning("Important News & Alerts:")
+                st.warning("Important Alerts:")
                 for alert in alerts:
                     st.write(f"  - {alert}")
 
             st.markdown("---") # Visual separator
 
-            # --- Financial Event Impact Analysis ---
-            st.markdown("<h3 style='color: #4682B4;'>📰 Financial Event Impact Analysis</h3>", unsafe_allow_html=True)
-            if combined_news_titles:
-                # Use the first news title for event analysis as an example
-                news_item_for_event_analysis = combined_news_titles[0]
-                sentiment_for_event = analyze_sentiment(news_item_for_event_analysis)
-                events = extract_financial_events(news_item_for_event_analysis)
-                impact, event_alerts = assess_impact(events, sentiment_for_event)
-                event_signal = generate_signal(impact)
-
-                st.write(f"Analyzing News Snippet: {news_item_for_event_analysis}")
-                st.write("Note: Event analysis is based on the news title/snippet. Full article content would provide deeper insights.")
-                st.write(f"**Identified Events:** {events if events else 'None'}")
-                st.write(f"**Sentiment of this News:** {sentiment_for_event:.2f}")
-                st.write(f"**Assessed Short-Term Impact:** {impact['short_term']}")
-                st.write(f"**Event-based Signal:** {event_signal}")
-
-                if event_alerts:
-                    st.warning("Event-Specific Alerts: " + " ".join(event_alerts))
-            else:
-                st.info("No news titles available to perform financial event impact analysis.")
-
-            st.markdown("---") # Visual separator
             # --- KEY ANALYSIS SUMMARY ---
             with st.container(border=True):
                 st.subheader(f"KEY ANALYSIS SUMMARY FOR {ticker_symbol_processed}")
                 st.metric(label="Final Recommendation", value=enhanced_recommendation)
                 st.metric(label="Confidence Level", value=f"{confidence_level}%")
                 # Simplified score calculation details
-                st.markdown(f"**Final Score Value (Weighted Average):** {final_score_value:.2f}") # Changed from **Final Score Value (Weighted Average):** {final_score_value:.2f}
+                st.markdown(f"**Final Score Value:** {final_score_value:.2f}")
+
+                # Construct a concise reason string for the summary
+                summary_reasons = []
+                # Technical highlights
+                if "Short-term SMA Cross" in breakdown["Technical Analysis"]:
+                    summary_reasons.append(f"Short-term SMA: {breakdown['Technical Analysis']['Short-term SMA Cross']}")
+                if "Long-term SMA Cross" in breakdown["Technical Analysis"]:
+                    summary_reasons.append(f"Long-term SMA: {breakdown['Technical Analysis']['Long-term SMA Cross']}")
+                if "RSI" in breakdown["Technical Analysis"]:
+                    summary_reasons.append(f"RSI: {breakdown['Technical Analysis']['RSI']}")
+                if "MACD Crossover" in breakdown["Technical Analysis"]:
+                    summary_reasons.append(f"MACD: {breakdown['Technical Analysis']['MACD Crossover']}")
+                # Fundamental highlights
+                if "P/E Ratio" in breakdown["Fundamental Analysis"]:
+                    summary_reasons.append(f"P/E Ratio: {breakdown['Fundamental Analysis']['P/E Ratio']}")
+                if "EPS Growth" in breakdown["Fundamental Analysis"]:
+                    summary_reasons.append(f"EPS Growth: {breakdown['Fundamental Analysis']['EPS Growth']}")
+                # Sentiment highlight
+                if "Overall News Sentiment" in breakdown["Sentiment Analysis"]:
+                    summary_reasons.append(f"News Sentiment: {breakdown['Sentiment Analysis']['Overall News Sentiment']}")
+
+                # Limit to top 5 reasons, prioritizing the order they are added
+                final_summary_reason_str = "Recommendation based on analysis: " + "; ".join(summary_reasons[:5])
+                if len(summary_reasons) > 5:
+                    final_summary_reason_str += "; ..." # Indicate more reasons if truncated
+                st.markdown(f"**Primary Reasons:** {final_summary_reason_str}")
 
                 if alerts: # Display critical alerts from enhanced analysis again for emphasis
                     st.warning("Important Alerts to Consider (from Enhanced Analysis):")
