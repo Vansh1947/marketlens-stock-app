@@ -209,22 +209,39 @@ if st.button("Analyze Stock"):
             st.markdown("---") # Visual separator
             with st.expander("⚙️ Key Indicators (Last Values)", expanded=False): # Changed title
                 technical_indicators = calculate_technical_indicators(historical_data)
-                st.write(f"**SMA_5:** {technical_indicators.get('SMA_5', 'N/A'):.2f}")
-                st.write(f"**SMA_20:** {technical_indicators.get('SMA_20', 'N/A'):.2f}")
-                st.write(f"**RSI:** {technical_indicators.get('RSI', 'N/A'):.2f}")
-                st.write(f"**Volume_SMA_5:** {technical_indicators.get('Volume_SMA_5', 'N/A'):.2f}")
+                
+                # Safely display technical indicators
+                sma_5 = technical_indicators.get('SMA_5')
+                st.write(f"**SMA_5:** {f'{sma_5:.2f}' if sma_5 is not None else 'N/A'}")
+
+                sma_20 = technical_indicators.get('SMA_20')
+                st.write(f"**SMA_20:** {f'{sma_20:.2f}' if sma_20 is not None else 'N/A'}")
+
+                rsi = technical_indicators.get('RSI')
+                st.write(f"**RSI:** {f'{rsi:.2f}' if rsi is not None else 'N/A'}")
+
+                volume_sma_5 = technical_indicators.get('Volume_SMA_5')
+                st.write(f"**Volume_SMA_5:** {f'{volume_sma_5:,.0f}' if volume_sma_5 is not None else 'N/A'}")
                 
                 macd_val = technical_indicators.get('MACD')
                 macd_signal_val = technical_indicators.get('MACD_Signal')
                 if macd_val is not None and macd_signal_val is not None:
                     st.write(f"**MACD:** {macd_val:.2f} (Signal: {macd_signal_val:.2f})")
+                else:
+                    st.write("**MACD:** N/A")
                 
                 st.markdown("---")
                 st.markdown("**Key Fundamental Metrics:**")
-                st.write(f"**P/E Ratio:** {company_fundamentals.get('trailingPE', 'N/A'):.2f}")
-                st.write(f"**EPS Growth (YoY):** {company_fundamentals.get('earningsGrowth', 'N/A'):.2%}")
-                st.write(f"**Return on Equity (ROE):** {company_fundamentals.get('returnOnEquity', 'N/A'):.2%}")
-                st.write(f"**Debt to Equity:** {company_fundamentals.get('debtToEquity', 'N/A'):.2f}")
+
+                # Safely display fundamental indicators
+                pe_ratio = company_fundamentals.get('trailingPE')
+                st.write(f"**P/E Ratio:** {f'{pe_ratio:.2f}' if isinstance(pe_ratio, (int, float)) else 'N/A'}")
+                eps_growth = company_fundamentals.get('earningsGrowth')
+                st.write(f"**EPS Growth (YoY):** {f'{eps_growth:.2%}' if isinstance(eps_growth, (int, float)) else 'N/A'}")
+                roe = company_fundamentals.get('returnOnEquity')
+                st.write(f"**Return on Equity (ROE):** {f'{roe:.2%}' if isinstance(roe, (int, float)) else 'N/A'}")
+                debt_to_equity = company_fundamentals.get('debtToEquity')
+                st.write(f"**Debt to Equity:** {f'{debt_to_equity:.2f}' if isinstance(debt_to_equity, (int, float)) else 'N/A'}")
 
             # 3. Fetch News Sentiment (from NewsAPI and GNews)
             # Initialize newsapi_client for Streamlit app context if not already done in stock.py
@@ -293,19 +310,6 @@ if st.button("Analyze Stock"):
                 company_fundamentals,
                 overall_news_sentiment
             )
-            st.markdown("<h3 style='color: #4682B4;'>✨ Enhanced Analysis</h3>", unsafe_allow_html=True)  # Styled subheader
-
-            cols = st.columns(3)
-            with cols[0]:
-                st.metric("📊 Technical Score", f"{category_scores.get('Technical', 0):.0f}/100")
-            with cols[1]:
-                st.metric("📈 Fundamental Score", f"{category_scores.get('Fundamental', 0):.0f}/100")
-            with cols[2]:
-                st.metric("📰 Sentiment Score", f"{category_scores.get('Sentiment', 0):.0f}/100")
-
-            st.metric(label="Final Recommendation", value=enhanced_recommendation)
-            st.metric(label="Confidence Level", value=f"{confidence_level}%")
-
             # Detailed Analysis Breakdown (collapsible)
             with st.expander("Detailed Analysis Breakdown", expanded=False):
                 for category, details in breakdown.items():
