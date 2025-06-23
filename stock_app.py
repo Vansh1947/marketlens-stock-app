@@ -283,7 +283,7 @@ if st.button("Analyze Stock"):
             # 5. Enhanced Analysis
             st.markdown("---") # Visual separator
             social_media_sentiment_input = None # Explicitly None as it's a placeholder
-            enhanced_recommendation, enhanced_confidence, alerts, breakdown, category_scores = enhanced_analysis(
+            enhanced_recommendation, confidence_level, alerts, breakdown, category_scores, final_score_value = enhanced_analysis(
                 ticker_symbol_processed,
                 historical_data,
                 technical_indicators,
@@ -304,7 +304,7 @@ if st.button("Analyze Stock"):
             with cols[2]:
                 st.metric("📰 Sentiment Score", f"{category_scores.get('Sentiment', 0):.0f}/100")
 
-            st.metric(label="Final Recommendation", value=enhanced_recommendation, help=f"Final Score: {enhanced_confidence}")
+            st.metric(label="Final Recommendation", value=enhanced_recommendation, help=f"Final Score Value: {final_score_value:.2f}")
             # Display the new breakdown for explainability
             with st.expander("Show Confidence Score Breakdown", expanded=True):
                  for category, details in breakdown.items():
@@ -367,14 +367,13 @@ if st.button("Analyze Stock"):
             with st.container(border=True):
                 st.subheader(f"KEY ANALYSIS SUMMARY FOR {ticker_symbol_processed}")
                 st.metric(label="Final Recommendation", value=enhanced_recommendation)
-                st.metric(label="Confidence Level", value=f"{enhanced_confidence}%")
+                st.metric(label="Confidence Level", value=f"{confidence_level}%")
                 st.markdown("**Score Calculation Details:**")
                 final_score_details = breakdown.get("Final Score Calculation", {})
                 st.write(f"**Sector:** {final_score_details.get('Sector', 'N/A')}")
                 st.write(f"**Category Weights:** {final_score_details.get('Weights', 'N/A')}")
-                st.write(f"**Raw Final Score:** {final_score_details.get('Raw Final Score', 'N/A')}")
-                st.write(f"**Volatility Factor Applied:** {final_score_details.get('Volatility Factor Applied', 'N/A')}")
-                st.write(f"**Adjusted Final Score:** {final_score_details.get('Adjusted Final Score', 'N/A')}")
+                st.write(f"**Final Score Value (Raw Weighted):** {final_score_details.get('Final Score Value (Raw Weighted)', 'N/A')}")
+                st.write(f"**Confidence Level (Adjusted for Volatility):** {final_score_details.get('Confidence Level (Adjusted for Volatility)', 'N/A')}")
 
 
                 if alerts: # Display critical alerts from enhanced analysis again for emphasis

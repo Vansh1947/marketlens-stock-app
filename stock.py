@@ -91,6 +91,24 @@ EPS_GROWTH_NEGATIVE_THRESHOLD = -0.1
 
 # --- Keyword Impact Configuration for Sentiment Analysis ---
 KEYWORD_IMPACTS = {
+    "dividend": 5,
+    "buyback": 8,
+    "layoffs": -10,
+    "lawsuit": -12,
+    "partnership": 7,
+    "guidance cut": -15,
+    "upgrade": 10,
+    "downgrade": -10,
+    # Existing keywords, ensure they are here if still desired
+    "fraud": -15, "scandal": -15, "investigation": -10, "acquisition": 7,
+    "growth": 5, "expansion": 5, "profit": 5, "innovat": 7, "ai": 8,
+    "robotaxi": 8, "bullish outlook": 6, "bankruptcy": -20,
+}
+
+
+
+# --- Keyword Impact Configuration for Sentiment Analysis ---
+KEYWORD_IMPACTS = {
     "fraud": -15,
     "scandal": -15,
     "investigation": -10,
@@ -108,15 +126,16 @@ KEYWORD_IMPACTS = {
 }
 
 # --- Sector-Aware Weighting Configuration ---
-# Weights for combining category scores. Must sum to 1.0 for each sector.
+# Weights for combining category scores. Must sum to 1.0 for each sector. (T: Technical, F: Fundamental, S: Sentiment)
 SECTOR_WEIGHTS = {
-    "Technology": {"technical": 0.35, "fundamental": 0.35, "sentiment": 0.30},
-    "Healthcare": {"technical": 0.25, "fundamental": 0.45, "sentiment": 0.30},
-    "Financial Services": {"technical": 0.30, "fundamental": 0.40, "sentiment": 0.30},
-    "Consumer Cyclical": {"technical": 0.30, "fundamental": 0.30, "sentiment": 0.40},
-    "Industrials": {"technical": 0.40, "fundamental": 0.40, "sentiment": 0.20},
-    "Energy": {"technical": 0.40, "fundamental": 0.20, "sentiment": 0.40},
-    "DEFAULT": {"technical": 0.33, "fundamental": 0.34, "sentiment": 0.33},
+    "Retail": {"technical": 0.30, "fundamental": 0.50, "sentiment": 0.20},
+    "Technology": {"technical": 0.30, "fundamental": 0.20, "sentiment": 0.50}, # Adjusted for Tech
+    "Healthcare": {"technical": 0.25, "fundamental": 0.45, "sentiment": 0.30}, # Kept as is
+    "Financial Services": {"technical": 0.30, "fundamental": 0.40, "sentiment": 0.30}, # Kept as is
+    "Consumer Cyclical": {"technical": 0.25, "fundamental": 0.40, "sentiment": 0.35}, # Adjusted for Consumer/Retail
+    "Industrials": {"technical": 0.40, "fundamental": 0.40, "sentiment": 0.20}, # Kept as is
+    "Energy": {"technical": 0.40, "fundamental": 0.20, "sentiment": 0.40}, # Kept as is
+    "DEFAULT": {"technical": 0.33, "fundamental": 0.33, "sentiment": 0.33}, # Adjusted for Default
 }
 
 # --- Recommendation Bands based on Final Score ---
@@ -128,10 +147,26 @@ def classify_recommendation(final_score: float) -> str:
         return "Buy"
     elif 40 <= final_score < 60:
         return "Hold"
-    elif 20 <= final_score < 40:
+    elif 20 <= final_score < 40: # This is now "Sell"
         return "Sell"
     else:  # < 20
         return "Strong Sell"
+
+def _calculate_confidence_level(category_scores: dict, historical_data: pd.DataFrame) -> int:
+    """
+    Calculates the confidence level based on signal alignment and volatility.
+    Confidence reflects how certain the model is about its recommendation.
+    """
+    # Confidence based on signal alignment (how far each category score is from neutral 50)
+    # Max deviation for one score is 50 (0 or 100). For 3 scores, max sum of deviations is 150.
+    conf_alignment = sum([abs(score - 50) for score in category_scores.values()]) / 150
+
+    # Volatility penalty
+    volatility_factor = _calculate_volatility_factor(historical_data)
+
+    # Adjusted Confidence: Higher alignment and lower volatility lead to higher confidence
+    confidence_level = int((conf_alignment * 100) * (1 - volatility_factor))
+    return max(0, min(100, confidence_level)) # Clamp between 0 and 100
 
 def _calculate_volatility_factor(historical_data: pd.DataFrame) -> float:
     """
@@ -425,16 +460,17 @@ def _calculate_sentiment_score(news_sentiment: float | None, market_news: list) 
     for news in market_news:
         news_lower = news.lower()
         if any(keyword in news_lower for keyword in ["fraud", "scandal", "investigation"]):
-            # Use the KEYWORD_IMPACTS dictionary for configurable impacts
-            impact = KEYWORD_IMPACTS.get("investigation", 0) # Default to 0 if not found
-            alerts.append(f"Alert: Company-specific negative news: '{news}'") # Keep alert
-            score += impact
-            breakdown["Keyword: Investigation/Fraud"] = f"{'+' if impact >= 0 else ''}{impact}"
-        for keyword, impact_value in KEYWORD_IMPACTS.items():
-            if keyword in news_lower and keyword not in ["fraud", "scandal", "investigation"]: # Avoid double counting
-                alerts.append(f"Alert: Keyword '{keyword}' detected: '{news}'")
-                score += impact_value
-                breakdown[f"Keyword: {keyword.capitalize()}"] = f"{'+' if impact_value >= 0 else ''}{impact_value}"
+            # Special handling for critical negative keywords
+            impact_value = KEYWORD_IMPACTS.get("investigation", 0) # Use 'investigation' as a general negative keyword
+            alerts.append(f"Alert: Company-specific negative news: '{news}'")
+            score += impact_value
+            breakdown["Keyword: Investigation/Fraud"] = f"{'+' if impact_value >= 0 else ''}{impact_value}"
+        else: # Process other keywords if no critical negative ones are found in this news item
+            for keyword, impact_value in KEYWORD_IMPACTS.items():
+                if keyword in news_lower:
+                    alerts.append(f"Alert: Keyword '{keyword}' detected: '{news}'")
+                    score += impact_value
+                    breakdown[f"Keyword: {keyword.capitalize()}"] = f"{'+' if impact_value >= 0 else ''}{impact_value}"
 
     return max(0, min(100, score)), breakdown, alerts
 
@@ -446,7 +482,7 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
     Performs an enhanced, categorized, and sector-aware stock analysis.
 
     Returns:
-        tuple: (Recommendation, Confidence, Alerts, Master_Breakdown, Category_Scores)
+        tuple: (Recommendation, Confidence_Level, Alerts, Master_Breakdown, Category_Scores, Final_Score_Value)
     """
     # 1. Calculate scores for each category
     tech_score, tech_breakdown = _calculate_technical_score(technical_indicators, historical_data)
@@ -472,13 +508,12 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
     )
 
     # 4. Classify recommendation and set confidence
-    # Apply volatility adjustment to the final score
-    volatility_factor = _calculate_volatility_factor(historical_data)
-    adjusted_final_score = final_score * (1 - volatility_factor)
+    # The 'final_score' (adjusted_final_score) determines the recommendation.
+    # The 'confidence_level' is a separate metric of conviction.
+    final_score_value = final_score # This is the raw weighted score
 
-    recommendation = classify_recommendation(adjusted_final_score)
-    # Confidence is now the adjusted final score, clamped to 0-100
-    confidence = int(max(0, min(100, adjusted_final_score)))
+    recommendation = classify_recommendation(final_score_value)
+    confidence_level = _calculate_confidence_level(category_scores, historical_data)
 
     # 5. Combine all breakdowns for a full report
     master_breakdown = {
@@ -488,13 +523,12 @@ def enhanced_analysis(stock_symbol: str, historical_data: pd.DataFrame, technica
         "Final Score Calculation": {
             "Sector": sector_key,
             "Weights": f"T({weights['technical']}), F({weights['fundamental']}), S({weights['sentiment']})",
-            "Raw Final Score": f"{final_score:.2f}",
-            "Volatility Factor Applied": f"{volatility_factor:.2f}",
-            "Adjusted Final Score": f"{adjusted_final_score:.2f}"
+            "Final Score Value (Raw Weighted)": f"{final_score_value:.2f}",
+            "Confidence Level (Adjusted for Volatility)": f"{confidence_level}%"
         }
     }
 
-    return recommendation, confidence, alerts, master_breakdown, category_scores
+    return recommendation, confidence_level, alerts, master_breakdown, category_scores, final_score_value
 
 # --- UTILITY FUNCTIONS ---
 def analyze_sentiment(text: str) -> float:
@@ -910,7 +944,7 @@ if __name__ == "__main__":
         # Placeholder for social_media_sentiment - would need integration with a social media API
         social_media_sentiment_placeholder = 0.1 # Example value
 
-        enhanced_recommendation, enhanced_confidence, alerts, breakdown, category_scores = enhanced_analysis(
+        enhanced_recommendation, confidence_level, alerts, breakdown, category_scores, final_score_value = enhanced_analysis(
             TICKER,
             historical_data,
             technical_indicators,
@@ -925,7 +959,7 @@ if __name__ == "__main__":
         for category, score in category_scores.items():
             print(f"  - {category}: {score:.2f}/100")
 
-        print(f"Recommendation: {enhanced_recommendation} (Confidence: {enhanced_confidence}%)")
+        print(f"Recommendation: {enhanced_recommendation} (Final Score: {final_score_value:.2f}, Confidence: {confidence_level}%)")
         print("Reason Breakdown:")
         for category, details in breakdown.items():
             print(f"  - {category}:")
