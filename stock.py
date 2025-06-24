@@ -146,6 +146,153 @@ def classify_recommendation(final_score: float) -> str:
     else:  # < 20
         return "Strong Sell"
 
+# New: News Keywords for granular sentiment analysis
+BULLISH_KEYWORDS_SCORES = {
+    "beats expectations": 0.3,
+    "record revenue": 0.4,
+    "buyback": 0.3,
+    "dividend increase": 0.25,
+    "raises forecast": 0.2,
+    "acquires": 0.25,
+    "partners with": 0.2,
+    "positive outlook": 0.2,
+    "new product": 0.2,
+    "launch": 0.2,
+    "strong earnings": 0.3,
+    "growth": 0.15,
+    "expansion": 0.15,
+    "upgraded to buy": 0.35,
+    "price target raised": 0.3,
+    "initiated with outperform": 0.25,
+    "strategic alliance": 0.2,
+    "merger deal": 0.25,
+    "introduces new product": 0.2,
+    "launches AI platform": 0.25,
+    "unveils service": 0.2,
+    "leads the market": 0.2,
+    "dominates segment": 0.25,
+    "increases market share": 0.2,
+    "FDA approval": 0.4,
+    "license granted": 0.35,
+    "greenlight from": 0.3,
+    "CEO buys shares": 0.3,
+    "board increases stake": 0.25,
+    "patent granted": 0.3,
+    "AI innovation": 0.35,
+    "technology breakthrough": 0.3,
+    "upbeat outlook": 0.2,
+    "expecting strong growth": 0.25,
+}
+
+BEARISH_KEYWORDS_SCORES = {
+    "misses expectations": -0.4,
+    "lower guidance": -0.3,
+    "lawsuit": -0.25,
+    "investigation": -0.25,
+    "data breach": -0.3,
+    "resignation": -0.2,
+    "cuts forecast": -0.2,
+    "profit warning": -0.35,
+    "layoffs": -0.2,
+    "downgrade": -0.25,
+    "debt": -0.15,
+    "decline": -0.15,
+    "recall": -0.2,
+    "lower revenue": -0.35,
+    "profit slump": -0.3,
+    "loss widened": -0.3,
+    "downgraded to sell": -0.4,
+    "target lowered": -0.35,
+    "initiated with underperform": -0.3,
+    "under investigation": -0.3,
+    "SEC probe": -0.35,
+    "executive leaves": -0.25,
+    "management shuffle": -0.2,
+    "liquidity concerns": -0.35,
+    "debt pressure": -0.3,
+    "cash burn": -0.3,
+    "missed payment": -0.4,
+    "exec sells stake": -0.3,
+    "shareholders exit": -0.25,
+    "large sell-off": -0.3,
+    "announces layoffs": -0.25,
+    "plant shutdown": -0.3,
+    "reduces workforce": -0.2,
+    "loses market share": -0.25,
+    "fierce competition": -0.2,
+    "falling behind": -0.2,
+    "expects decline": -0.25,
+    "uncertain outlook": -0.2,
+    "IPO withdrawn": -0.3,
+    "project postponed": -0.25,
+    "regulatory delay": -0.25,
+}
+
+# Consolidate and deduplicate keywords, taking the first score if duplicates exist
+BULLISH_KEYWORDS_SCORES = {k: v for k, v in BULLISH_KEYWORDS_SCORES.items()}
+BEARISH_KEYWORDS_SCORES = {k: v for k, v in BEARISH_KEYWORDS_SCORES.items()}
+
+# Map themes to example keywords for alert generation (simplified for now)
+NEWS_THEMES = {
+    "Earnings Beat": ["beats expectations", "record revenue", "strong earnings", "profit surge"],
+    "Analyst Upgrade": ["upgraded to buy", "price target raised", "initiated with outperform"],
+    "Buyback/Dividend": ["declares dividend", "announces buyback", "dividend increase", "capital return"],
+    "Acquisition/Partnership": ["strategic alliance", "merger deal", "partnership with", "acquires"],
+    "Product Launch": ["introduces new product", "launches AI platform", "unveils service", "new product", "launch"],
+    "Market Leadership": ["leads the market", "dominates segment", "increases market share"],
+    "Regulatory Approval": ["FDA approval", "license granted", "greenlight from"],
+    "Insider Buying": ["CEO buys shares", "board increases stake"],
+    "Innovation": ["patent granted", "AI innovation", "technology breakthrough"],
+    "Growth Forecasts": ["raises guidance", "upbeat outlook", "expecting strong growth", "raises forecast"],
+
+    "Earnings Miss": ["misses expectations", "lower revenue", "profit slump", "loss widened"],
+    "Analyst Downgrade": ["downgraded to sell", "target lowered", "initiated with underperform"],
+    "Regulatory Risk": ["under investigation", "SEC probe", "data breach", "lawsuit filed"],
+    "Resignations": ["CEO steps down", "executive leaves", "management shuffle", "resignation"],
+    "Debt/Cash Problems": ["liquidity concerns", "debt pressure", "cash burn", "missed payment", "debt"],
+    "Insider Selling": ["exec sells stake", "shareholders exit", "large sell-off"],
+    "Layoffs/Closures": ["announces layoffs", "plant shutdown", "reduces workforce", "layoffs"],
+    "Competitive Pressure": ["loses market share", "fierce competition", "falling behind"],
+    "Negative Forecasts": ["cuts guidance", "expects decline", "uncertain outlook", "cuts forecast", "profit warning"],
+    "Delisting/Delays": ["IPO withdrawn", "project postponed", "regulatory delay", "recall"],
+}
+
+# Reverse map keywords to themes for easier lookup
+KEYWORD_TO_THEME = {}
+for theme, keywords in NEWS_THEMES.items():
+    for keyword in keywords:
+        KEYWORD_TO_THEME[keyword] = theme
+
+def analyze_news_keywords(text: str) -> tuple[float, list[str]]:
+    """
+    Analyzes text for predefined bullish and bearish keywords and returns a score
+    and a list of matched themes.
+    """
+    text_lower = text.lower()
+    keyword_score = 0.0
+    matched_themes = set() # Use a set to avoid duplicate themes
+
+    for keyword, score in BULLISH_KEYWORDS_SCORES.items():
+        if keyword in text_lower:
+            keyword_score += score
+            if keyword in KEYWORD_TO_THEME:
+                matched_themes.add(KEYWORD_TO_THEME[keyword])
+            else:
+                matched_themes.add(f"Bullish: {keyword}") # Fallback if keyword not in themes
+
+    for keyword, score in BEARISH_KEYWORDS_SCORES.items():
+        if keyword in text_lower:
+            keyword_score += score
+            if keyword in KEYWORD_TO_THEME:
+                matched_themes.add(KEYWORD_TO_THEME[keyword])
+            else:
+                matched_themes.add(f"Bearish: {keyword}") # Fallback if keyword not in themes
+    
+    # Cap the keyword score to prevent it from dominating too much
+    keyword_score = max(-1.0, min(1.0, keyword_score)) # Cap between -1 and 1
+
+    return keyword_score, list(matched_themes)
+
 # --- TECHNICAL INDICATOR CALCULATIONS ---
 def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
     """
@@ -437,9 +584,9 @@ def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dic
     return max(0, min(100, score)), breakdown
 
 # --- DYNAMIC ALERTS GENERATION ---
-def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None,
-                            sma_200: float | None, current_price: float | None,
-                            news_sentiment: float | None, ath_price: float | None) -> list[str]:
+def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None, # Keep SMA50/200 for general alerts if needed, even if not in swing confidence
+                            sma_200: float | None, current_price: float | None, # Keep SMA50/200 for general alerts if needed, even if not in swing confidence
+                            overall_news_sentiment: float | None, ath_price: float | None, all_matched_news_themes: list[str]) -> list[str]:
     """
     Generates dynamic alerts based on various technical and sentiment conditions.
     """
@@ -475,18 +622,43 @@ def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: f
         elif macd_hist > MACD_HIST_BULLISH_THRESHOLD: # MACD line crosses above signal
             alerts.append("🚀 Bullish MACD crossover.")
 
-    # SMA Alerts (Golden/Death Cross)
+    # SMA Alerts (Golden/Death Cross - still useful for context, even if not direct swing signal)
+    if sma_50 is not None and sma_200 is not None:
+        if sma_50 > sma_200:
+            alerts.append("✨ Golden Cross detected (SMA50 > SMA200) – long-term bullish context.")
+        elif sma_50 < sma_200:
+            alerts.append("☠️ Death Cross detected (SMA50 < SMA200) – long-term bearish context.")
+
     # Price Action Alerts (Near ATH)
     if current_price is not None and ath_price is not None and ath_price > 0:
         if current_price >= PRICE_NEAR_ATH_THRESHOLD * ath_price:
             alerts.append("📈 Near 1-year high – check valuation.")
 
-    # News Sentiment Alerts
-    if news_sentiment is not None:
-        if news_sentiment < NEWS_SENTIMENT_STRONG_NEGATIVE_THRESHOLD: # sentiment < -0.4
-            alerts.append("📰 Negative news trend – caution advised.")
-        elif news_sentiment > NEWS_SENTIMENT_STRONG_POSITIVE_THRESHOLD: # sentiment > 0.4
-            alerts.append("📢 Positive sentiment momentum – market optimism.")
+    # News Alerts (more granular based on themes)
+    if all_matched_news_themes:
+        for theme in sorted(list(set(all_matched_news_themes))): # Deduplicate and sort themes
+            # Check if the theme is explicitly defined in NEWS_THEMES
+            if theme in NEWS_THEMES:
+                # Determine if the theme is generally bullish or bearish based on its keywords
+                is_bullish_theme = any(k in BULLISH_KEYWORDS_SCORES for k in NEWS_THEMES[theme])
+                is_bearish_theme = any(k in BEARISH_KEYWORDS_SCORES for k in NEWS_THEMES[theme])
+                
+                if is_bullish_theme and not is_bearish_theme:
+                    alerts.append(f"📢 News: {theme} detected – strong positive signal.")
+                elif is_bearish_theme and not is_bullish_theme:
+                    alerts.append(f"📰 News: {theme} detected – strong negative signal.")
+                else: # Mixed or neutral theme (e.g., if keywords are both bullish and bearish, or none)
+                    alerts.append(f"ℹ️ News: {theme} detected – mixed sentiment.")
+            else: # Fallback for themes not explicitly mapped (e.g., "Bullish: some_keyword")
+                alerts.append(f"ℹ️ News: {theme} detected.")
+    else: # If no specific news themes were matched, use general sentiment alerts
+        if overall_news_sentiment is not None:
+            if overall_news_sentiment < NEWS_SENTIMENT_STRONG_NEGATIVE_THRESHOLD:
+                alerts.append("📰 Overall news sentiment is strongly negative – caution advised.")
+            elif overall_news_sentiment > NEWS_SENTIMENT_STRONG_POSITIVE_THRESHOLD:
+                alerts.append("📢 Overall news sentiment is strongly positive – market optimism.")
+            else:
+                alerts.append("ℹ️ Overall news sentiment is neutral.")
 
     return alerts
 
@@ -621,8 +793,9 @@ def evaluate_stock(
     technical_indicators: dict,
     company_fundamentals: dict,
     overall_news_sentiment: float | None,
-    current_price: float | None,
-    all_time_high: float | None # This is the ATH for the selected period
+    current_price: float | None, # Keep for alerts
+    all_time_high: float | None, # Keep for alerts
+    all_matched_news_themes: list[str] # New parameter for granular news alerts
 ) -> dict:
     """
     Orchestrates the swing trader recommendation system.
@@ -638,8 +811,8 @@ def evaluate_stock(
     volume_sma_5 = technical_indicators.get('Volume_SMA_5')
 
     # Generate all dynamic alerts once
-    all_dynamic_alerts = generate_dynamic_alerts(rsi, macd_hist, sma_5, sma_10, current_volume, volume_sma_5, sma_50, sma_200,
-                                                 current_price, overall_news_sentiment, all_time_high)
+    all_dynamic_alerts = generate_dynamic_alerts(rsi, macd_hist, sma_5, sma_10, current_volume, volume_sma_5, sma_50, sma_200, # Pass SMA50/200 for general alerts
+                                                 current_price, overall_news_sentiment, all_time_high, all_matched_news_themes)
 
     data_for_eval = {
         "SMA_5": technical_indicators.get('SMA_5'),
@@ -995,7 +1168,7 @@ if __name__ == "__main__":
     historical_data, current_price, company_fundamentals, error = get_stock_data(TICKER, period="max") # Use "max" for ATH
 
     if error:
-        logger.error(f"Error: {error}")
+        logger.error(f"Error fetching stock data: {error}")
     elif historical_data is None or historical_data.empty:
         logger.warning(f"Could not retrieve sufficient data for {TICKER}. Exiting.")
     else:
@@ -1031,27 +1204,34 @@ if __name__ == "__main__":
         env_news_api_key = os.environ.get("NEWS_API_KEY")
         env_gnews_api_key = os.environ.get("GNEWS_API_KEY")
 
-        # Each fetch function now returns a list of (sentiment, weight) tuples and titles
-        newsapi_weighted_sentiments, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key, company_long_name)
-        ticker_specific_rss_url = BASE_GOOGLE_NEWS_RSS_URL.format(ticker=TICKER)
-        rss_weighted_sentiments, rss_titles = fetch_news_sentiment_from_rss(ticker_specific_rss_url, TICKER, company_long_name)
-        gnews_weighted_sentiments, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key, company_long_name)
-
-        all_weighted_sentiments = []
+        all_weighted_sentiments_with_themes = []
         all_news_titles = []
+        all_matched_news_themes = [] # Collect all matched themes here
 
-        all_weighted_sentiments.extend(newsapi_weighted_sentiments)
+        newsapi_results, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key, company_long_name)
+        all_weighted_sentiments_with_themes.extend(newsapi_results)
         all_news_titles.extend(newsapi_titles)
-        all_weighted_sentiments.extend(rss_weighted_sentiments)
+        for _, _, themes in newsapi_results:
+            all_matched_news_themes.extend(themes)
+
+        ticker_specific_rss_url = BASE_GOOGLE_NEWS_RSS_URL.format(ticker=TICKER)
+        rss_results, rss_titles = fetch_news_sentiment_from_rss(ticker_specific_rss_url, TICKER, company_long_name)
+        all_weighted_sentiments_with_themes.extend(rss_results)
         all_news_titles.extend(rss_titles)
-        all_weighted_sentiments.extend(gnews_weighted_sentiments)
+        for _, _, themes in rss_results:
+            all_matched_news_themes.extend(themes)
+
+        gnews_results, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key, company_long_name)
+        all_weighted_sentiments_with_themes.extend(gnews_results)
         all_news_titles.extend(gnews_titles)
+        for _, _, themes in gnews_results:
+            all_matched_news_themes.extend(themes)
 
         overall_news_sentiment = None
-        if all_weighted_sentiments:
+        if all_weighted_sentiments_with_themes:
             # Calculate weighted average
-            total_sentiment_score = sum(s * w for s, w in all_weighted_sentiments)
-            total_weight = sum(w for s, w in all_weighted_sentiments)
+            total_sentiment_score = sum(s * w for s, w, _ in all_weighted_sentiments_with_themes)
+            total_weight = sum(w for s, w, _ in all_weighted_sentiments_with_themes)
             if total_weight > 0:
                 overall_news_sentiment = total_sentiment_score / total_weight
             else:
@@ -1097,7 +1277,7 @@ if __name__ == "__main__":
         # ATH is now part of company_fundamentals
         all_time_high_for_period = company_fundamentals.get('ath_from_period')
         swing_analysis_results = evaluate_stock(
-            historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period
+            historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period, all_matched_news_themes
         )
         logger.info("\nSwing Trader Recommendation:")
         logger.info(f"  Recommendation: {swing_analysis_results['swing_trader']['recommendation']}")

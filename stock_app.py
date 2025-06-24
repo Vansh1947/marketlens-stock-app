@@ -8,7 +8,8 @@ st.set_page_config(
 )
 
 # Import all your functions from stock.py, including new ones for news refinement, basic_analysis, and updated parameters for generate_dynamic_alerts
-# Assuming stock.py is in the same directory or accessible via PYTHONPATH
+# Assuming stock.py is in the same directory or accessible via PYTHONPATH.
+# Note: The return type of news fetching functions changed to include matched themes.
 from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
     fetch_news_sentiment_from_gnews, analyze_sentiment, basic_analysis, evaluate_stock,
     enhanced_analysis, is_stock_mentioned, get_source_weight, fetch_news_sentiment_from_rss # Added fetch_news_sentiment_from_rss
@@ -27,17 +28,17 @@ except ImportError:
     # Plotting functions will handle pandas-ta (aliased as ta) being None.
 
 # --- Caching Decorators for Streamlit ---
-# Cache stock data for 1 hour
+# Cache stock data for 1 hour.
 @st.cache_data(ttl=3600)
 def cached_get_stock_data(ticker_symbol, period):
     return get_stock_data(ticker_symbol, period)
 
-# Cache technical indicators for 1 hour
+# Cache technical indicators for 1 hour.
 @st.cache_data(ttl=3600)
 def cached_calculate_technical_indicators(historical_data):
     return calculate_technical_indicators(historical_data)
 
-# Cache news sentiment for 4 hours (adjust TTL as needed for freshness vs API limits)
+# Cache news sentiment for 4 hours (adjust TTL as needed for freshness vs API limits).
 @st.cache_data(ttl=14400)
 def cached_fetch_news_sentiment_from_newsapi(ticker_symbol, api_key, company_name):
     return fetch_news_sentiment_from_newsapi(ticker_symbol, api_key, company_name)
@@ -289,7 +290,8 @@ if st.button("Analyze Stock"):
 
             # 3. Fetch News Sentiment (from NewsAPI and GNews)
             all_weighted_sentiments = []
-            combined_news_titles = [] # This will hold unique titles from all sources
+            combined_news_titles = []
+            all_matched_news_themes = [] # New: Collect all matched news themes here
 
             # Fetch NewsAPI sentiment if key is available
             if APP_NEWS_API_KEY: # Check if the NewsAPI key is configured
@@ -301,14 +303,18 @@ if st.button("Analyze Stock"):
             # Check if the GNews API key is configured
             if APP_GNEWS_API_KEY: 
                 st.write(f"Attempting to fetch news from GNews for {ticker_symbol_processed}...") # User feedback
-                gnews_weighted_sentiments, gnews_titles = fetch_news_sentiment_from_gnews(ticker_symbol_processed, APP_GNEWS_API_KEY, company_long_name) # Pass the API key
-                all_weighted_sentiments.extend(gnews_weighted_sentiments)
+                gnews_results, gnews_titles = cached_fetch_news_sentiment_from_gnews(ticker_symbol_processed, APP_GNEWS_API_KEY, company_long_name) # Pass the API key
+                all_weighted_sentiments.extend(gnews_results)
                 combined_news_titles.extend(gnews_titles) # Add titles from GNews
 
+            # Extract all matched themes from the fetched news results
+            for _, _, themes in all_weighted_sentiments:
+                all_matched_news_themes.extend(themes)
+
             overall_news_sentiment = None
-            if all_weighted_sentiments:
-                total_sentiment_score = sum(s * w for s, w in all_weighted_sentiments)
-                total_weight = sum(w for s, w in all_weighted_sentiments)
+            if all_weighted_sentiments: # Check if there's any news data
+                total_sentiment_score = sum(s * w for s, w, _ in all_weighted_sentiments) # Unpack the tuple
+                total_weight = sum(w for s, w, _ in all_weighted_sentiments) # Unpack the tuple
                 if total_weight > 0:
                     overall_news_sentiment = total_sentiment_score / total_weight
                 else:
@@ -347,9 +353,10 @@ if st.button("Analyze Stock"):
             # ATH is calculated in get_stock_data and passed via company_fundamentals for simplicity
             # It's stored as 'ath_from_period'
             all_time_high_for_period = company_fundamentals.get('ath_from_period')
-            
+            # Pass the collected news themes to evaluate_stock
             dual_analysis_results = evaluate_stock(
                 historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period
+                , all_matched_news_themes # New argument
             ) # This now returns only swing_trader results
             
             st.subheader("📈 Swing Trader Recommendation")
