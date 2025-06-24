@@ -90,6 +90,21 @@ VOLUME_HIGH_THRESHOLD_MULTIPLIER = 1.5 # Current volume > 1.5 * SMA_5_Volume
 ROE_GOOD_THRESHOLD = 0.15 # 15%
 DEBT_TO_EQUITY_LOW_THRESHOLD = 0.5 # Lower is better
 DEBT_TO_EQUITY_HIGH_THRESHOLD = 1.5 # Higher is worse
+# Swing Trader Thresholds
+SWING_RSI_LOWER_BUY = 30
+SWING_RSI_UPPER_BUY = 45
+SWING_SENTIMENT_BUY_THRESHOLD = 0.2
+SWING_ATH_DISCOUNT_BUY = 0.95 # Current price < 95% of ATH
+SWING_RSI_SELL = 70
+SWING_SENTIMENT_SELL_THRESHOLD = -0.2
+SWING_ATH_PREMIUM_SELL = 0.98 # Current price >= 98% of ATH
+
+# Long-Term Investor Thresholds
+LT_PE_BUY_THRESHOLD = 40
+LT_EPS_GROWTH_BUY_THRESHOLD = 0.0 # EPS Growth > 0
+LT_ROE_BUY_THRESHOLD = 0.15 # 15%
+LT_DE_BUY_THRESHOLD = 0.80 # 80%
+
 # --- END OF THRESHOLDS ---
 
 # --- Recommendation Bands based on Final Score ---
@@ -473,6 +488,190 @@ def _calculate_fundamental_score(company_fundamentals: dict) -> tuple[float, dic
         breakdown["Debt to Equity"] = {"points": 0, "details": "N/A"}
     
     return max(0, min(100, score)), breakdown
+# --- DUAL RECOMMENDATION SYSTEM ---
+def evaluate_swing(data: dict) -> dict:
+    """
+    Evaluates stock for swing trading based on technicals, sentiment, and ATH.
+    """
+    # Extract data, providing defaults for safety
+    sma_5 = data.get("SMA_5")
+    sma_20 = data.get("SMA_20")
+    rsi = data.get("RSI")
+    macd = data.get("MACD")
+    macd_signal = data.get("MACD_Signal")
+    sentiment = data.get("sentiment", 0.0)
+    current_price = data.get("current_price")
+    ath = data.get("ATH")
+
+    recommendation = "Hold (Swing)"
+    swing_score = 10 # Base score for hold
+    alert = "ℹ️ No strong short-term signals"
+
+    # Check if critical data is missing for a meaningful analysis
+    if any(x is None for x in [sma_5, sma_20, rsi, macd, macd_signal, current_price, ath]):
+        return {
+            "recommendation": "Hold (Swing)",
+            "confidence": 0,
+            "alert": "⚠️ Insufficient data for swing analysis"
+        }
+
+    # Buy Conditions
+    if (
+        sma_5 > sma_20 and
+        SWING_RSI_LOWER_BUY < rsi < SWING_RSI_UPPER_BUY and
+        macd > macd_signal and
+        sentiment > SWING_SENTIMENT_BUY_THRESHOLD and
+        current_price < (ath * SWING_ATH_DISCOUNT_BUY)
+    ):
+        recommendation = "Buy (Swing)"
+        swing_score = 20 # Base for buy
+        if rsi < 35: # Specific RSI for stronger signal
+            alert = "🔔 Possible reversal setup detected (RSI low)"
+        if (ath - current_price) / ath > 0.1: # Significant discount from ATH
+            alert = "🔔 Strong discount from all-time high"
+    
+    # Sell Conditions
+    elif (
+        sma_5 < sma_20 and
+        rsi > SWING_RSI_SELL and
+        macd < macd_signal and
+        sentiment < SWING_SENTIMENT_SELL_THRESHOLD and
+        current_price >= ath * SWING_ATH_PREMIUM_SELL
+    ):
+        recommendation = "Sell (Swing)"
+        swing_score = 20 # Base for sell
+        alert = "⚠️ Price is near all-time high with overbought signals"
+    
+    # Confidence Calculation (0 to 100)
+    if recommendation == "Buy (Swing)":
+        swing_score += (SWING_RSI_UPPER_BUY - rsi) + (sentiment * 50)
+    elif recommendation == "Sell (Swing)":
+        swing_score += (rsi - SWING_RSI_SELL) + abs(sentiment * 50)
+    # For "Hold", swing_score remains 10
+
+    confidence = min(int(swing_score), 100)
+
+    return {
+        "recommendation": recommendation,
+        "confidence": confidence,
+        "alert": alert
+    }
+
+def evaluate_long_term(data: dict) -> dict:
+    """
+    Evaluates stock for long-term investment based on fundamentals, sentiment, and ATH.
+    """
+    # Extract data, providing defaults for safety
+    sma_50 = data.get("SMA_50")
+    sma_200 = data.get("SMA_200")
+    pe_ratio = data.get("PE_ratio")
+    eps_growth = data.get("EPS_growth")
+    roe = data.get("ROE")
+    d_e_ratio = data.get("D_E_ratio")
+    sentiment = data.get("sentiment", 0.0)
+    current_price = data.get("current_price")
+    ath = data.get("ATH")
+
+    recommendation = "Hold (Long-Term)"
+    long_term_score = 10 # Base score for hold
+    alert = "ℹ️ Fundamentals are stable but not ideal for action"
+
+    # Define internal thresholds for sell conditions (derived from your prompt)
+    LT_EPS_GROWTH_SELL_THRESHOLD = 0.0 # EPS Growth < 0
+    LT_PE_SELL_THRESHOLD = 45
+    LT_ROE_SELL_THRESHOLD = 0.10 # 10%
+    LT_DE_SELL_THRESHOLD = 1.20 # 120%
+    LT_ATH_PREMIUM_SELL = 0.98 # Current price >= 98% of ATH
+
+    # Check if critical data is missing for a meaningful analysis
+    if any(x is None for x in [sma_50, sma_200, pe_ratio, eps_growth, roe, d_e_ratio, current_price, ath]):
+        return {
+            "recommendation": "Hold (Long-Term)",
+            "confidence": 0,
+            "alert": "⚠️ Insufficient data for long-term analysis"
+        }
+
+    # Buy Conditions
+    if (
+        sma_50 > sma_200 and
+        eps_growth > LT_EPS_GROWTH_BUY_THRESHOLD and
+        pe_ratio < LT_PE_BUY_THRESHOLD and
+        roe > LT_ROE_BUY_THRESHOLD and
+        d_e_ratio < LT_DE_BUY_THRESHOLD and
+        current_price < (ath * SWING_ATH_DISCOUNT_BUY) # Reusing SWING_ATH_DISCOUNT_BUY for consistency
+    ):
+        recommendation = "Buy (Long-Term)"
+        long_term_score = 20 # Base for buy
+        if (ath - current_price) / ath > 0.15:
+            alert = "📈 Stock is undervalued compared to ATH"
+    
+    # Sell Conditions
+    elif (
+        sma_50 < sma_200 or
+        eps_growth < LT_EPS_GROWTH_SELL_THRESHOLD or
+        pe_ratio > LT_PE_SELL_THRESHOLD or
+        roe < LT_ROE_SELL_THRESHOLD or
+        d_e_ratio > LT_DE_SELL_THRESHOLD or
+        current_price >= ath * LT_ATH_PREMIUM_SELL
+    ):
+        recommendation = "Sell (Long-Term)"
+        long_term_score = 20 # Base for sell
+        alert = "⚠️ Deteriorating financials or overvaluation near ATH"
+    
+    # Confidence Calculation (0 to 100)
+    if recommendation == "Buy (Long-Term)":
+        long_term_score += (roe * 100) + (eps_growth * 100) + (LT_PE_BUY_THRESHOLD - pe_ratio)
+        long_term_score += max(0, (ath - current_price) / ath * 100)
+    elif recommendation == "Sell (Long-Term)":
+        long_term_score += pe_ratio + (d_e_ratio * 100 if d_e_ratio is not None and d_e_ratio > LT_DE_SELL_THRESHOLD else 0) # Penalize high D/E
+        long_term_score += abs(min(0, eps_growth)) * 50 # Scale negative EPS growth impact
+    # For "Hold", long_term_score remains 10
+
+    confidence = min(int(long_term_score), 100)
+
+    return {
+        "recommendation": recommendation,
+        "confidence": confidence,
+        "alert": alert
+    }
+
+def evaluate_stock(
+    historical_data: pd.DataFrame,
+    technical_indicators: dict,
+    company_fundamentals: dict,
+    overall_news_sentiment: float | None,
+    current_price: float | None,
+    all_time_high: float | None # This is the ATH for the selected period
+) -> dict:
+    """
+    Orchestrates the dual recommendation system for swing traders and long-term investors.
+    """
+    # Prepare data dictionary for the new evaluation functions
+    data_for_eval = {
+        "SMA_5": technical_indicators.get('SMA_5'),
+        "SMA_20": technical_indicators.get('SMA_20'),
+        "SMA_50": technical_indicators.get('SMA_50'),
+        "SMA_200": technical_indicators.get('SMA_200'),
+        "RSI": technical_indicators.get('RSI'),
+        "MACD": technical_indicators.get('MACD'),
+        "MACD_Signal": technical_indicators.get('MACD_Signal'),
+        "PE_ratio": company_fundamentals.get('trailingPE'),
+        "EPS_growth": company_fundamentals.get('earningsGrowth'),
+        "ROE": company_fundamentals.get('returnOnEquity'),
+        "D_E_ratio": company_fundamentals.get('debtToEquity'),
+        "sentiment": overall_news_sentiment,
+        "current_price": current_price,
+        "ATH": all_time_high,
+    }
+
+    swing_result = evaluate_swing(data_for_eval)
+    long_term_result = evaluate_long_term(data_for_eval)
+
+    return {
+        "swing_trader": swing_result,
+        "long_term_investor": long_term_result
+    }
+
 
 def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dict, list]:
     """Calculates a normalized sentiment score (0-100) and provides a breakdown and alerts."""
@@ -691,12 +890,13 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> 
         print(f"Error fetching or processing GNews for {ticker_symbol}: {e}")
         return None, []
 
-def get_stock_data(ticker_symbol: str) -> tuple[pd.DataFrame | None, float | None, dict | None, str | None]:
+def get_stock_data(ticker_symbol: str, period: str = "2y") -> tuple[pd.DataFrame | None, float | None, dict | None, str | None]:
     """
     Fetches historical stock data and basic company fundamentals using yfinance.
 
     Args:
         ticker_symbol (str): The stock ticker symbol.
+        period (str): The period for which to fetch historical data (e.g., "1y", "2y", "max").
 
     Returns:
         tuple: (historical_data: pd.DataFrame, current_price: float,
@@ -718,19 +918,26 @@ def get_stock_data(ticker_symbol: str) -> tuple[pd.DataFrame | None, float | Non
             company_fundamentals.get('marketCap') is None):
             return None, None, None, f"No valid data or fundamentals found for '{ticker_symbol}'. It might be an invalid ticker, delisted, or data is unavailable."
 
-        # Fetch 2 years of daily historical data for comprehensive analysis
-        historical_data = stock.history(period="2y")
+        # Fetch historical data for the specified period
+        historical_data = stock.history(period=period)
 
         if historical_data.empty:
             # We might have fundamentals, but no historical data for the specified period
             current_price_from_info = company_fundamentals.get('regularMarketPrice') or company_fundamentals.get('currentPrice')
-            # It's unusual to have fundamentals but no historical data for a valid, active ticker over "2y"
+            # It's unusual to have fundamentals but no historical data for a valid, active ticker
             # but we return what we have along with a message.
-            return None, current_price_from_info, company_fundamentals, f"No historical data found for '{ticker_symbol}' for the period '2y'. Some fundamental data might be available."
+            return None, current_price_from_info, company_fundamentals, f"No historical data found for '{ticker_symbol}' for the period '{period}'. Some fundamental data might be available."
 
         # Ensure 'Close' column exists and has data before accessing iloc[-1]
         if 'Close' in historical_data.columns and not historical_data['Close'].empty:
             current_price_from_history = historical_data['Close'].iloc[-1]
+            # Calculate All-Time High from the fetched historical data period
+            # This is the high for the selected period, not the true all-time high unless period='max'
+            ath_from_period = historical_data['High'].max() # Use 'High' column for ATH
+            # Add ATH to company_fundamentals for easy access in other functions
+            company_fundamentals['ath_from_period'] = ath_from_period
+            company_fundamentals['period_used_for_ath'] = period # Store the period for context
+
         else:
             # Fallback if 'Close' is missing or empty, though unlikely if historical_data itself is not empty
             current_price_from_history = company_fundamentals.get('regularMarketPrice') or company_fundamentals.get('currentPrice')
@@ -852,5 +1059,17 @@ if __name__ == "__main__":
                 print(f"  - {alert}")
         else:
             print("No specific alerts.")
+                 # Dual Recommendation System
+        print(f"\n--- Dual Recommendation System for {TICKER} ---")
+        # ATH is now part of company_fundamentals
+        all_time_high_for_period = company_fundamentals.get('ath_from_period')
+        dual_analysis_results = evaluate_stock(
+            historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period
+        )
+        print("\nSwing Trader Recommendation:")
+        print(dual_analysis_results["swing_trader"])
+        print("\nLong-Term Investor Recommendation:")
+        print(dual_analysis_results["long_term_investor"])
+
 
     print("\nScript finished.")

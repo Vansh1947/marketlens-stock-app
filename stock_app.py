@@ -152,8 +152,26 @@ st.markdown("<h1 style='text-align: center; color: #1E90FF;'>üîç MarketLens üì
 st.markdown("<p style='text-align: center; color: #696969;'>Your Clear View on Stock Performance & News</p>", unsafe_allow_html=True)
 st.markdown("---") # Horizontal rule below title
 
-# Input for the stock ticker
-ticker_input_raw = st.text_input("Enter Stock Ticker (e.g., GOOG, AAPL, RELIANCE.NS):", "GOOG")
+col1, col2 = st.columns([3, 1])
+with col1:
+    # Input for the stock ticker
+    ticker_input_raw = st.text_input("Enter Stock Ticker (e.g., GOOG, AAPL, RELIANCE.NS):", "GOOG")
+with col2:
+    # Input for the analysis period
+    analysis_period = st.selectbox(
+        "Select Analysis Period (for ATH):",
+        ("6 Months", "1 Year", "2 Years", "Max"),
+        index=2  # Default to '2 Years'
+    )
+
+# Map user-friendly names to yfinance period strings
+period_map = {
+    "6 Months": "6mo",
+    "1 Year": "1y",
+    "2 Years": "2y",
+    "Max": "max"
+}
+selected_period_yf = period_map[analysis_period]
 
 # Button to trigger analysis
 if st.button("Analyze Stock"):
@@ -162,10 +180,10 @@ if st.button("Analyze Stock"):
     else:
         # Clean and uppercase the ticker symbol for consistent processing
         ticker_symbol_processed = ticker_input_raw.strip().upper()
-        st.info(f"Analyzing {ticker_symbol_processed}...")
+        st.info(f"Analyzing {ticker_symbol_processed} for period: {analysis_period}...")
 
         # 1. Get Stock Data
-        historical_data, current_price, company_fundamentals, error = get_stock_data(ticker_symbol_processed)
+        historical_data, current_price, company_fundamentals, error = get_stock_data(ticker_symbol_processed, period=selected_period_yf)
 
         if error:
             st.error(f"Error fetching data for {ticker_symbol_processed}: {error}")
