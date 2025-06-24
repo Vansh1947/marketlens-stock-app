@@ -146,9 +146,299 @@ def classify_recommendation(final_score: float) -> str:
     else:  # < 20
         return "Strong Sell"
 
+# --- TECHNICAL INDICATOR CALCULATIONS ---
+def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
+    """
+    Calculates various technical indicators for the given historical stock data.
+
+    Args:
+        historical_data (pd.DataFrame): DataFrame with 'Close' and 'Volume' columns.
+
+    Returns:
+        dict: A dictionary containing calculated technical indicators.
+    """
+    if len(historical_data) < 5:
+        logger.warning("Insufficient data for calculating technical indicators. Returning empty dict.")
+        return {}
+    if ta is None:
+        return {}
+    df = historical_data.copy()
+    indicators = {}
+
+    # Ensure enough data for indicators
+    if len(df) < 200: # Max window size for SMAs
+        # pandas-ta might also print its own warnings if data is insufficient for certain indicators
+        logger.warning(f"Not enough historical data ({len(df)} rows) for some indicators (e.g., SMA200 needs 200). Some indicators might be None.")
+
+    # Simple Moving Averages
+    indicators['SMA_5'] = df['Close'].rolling(window=5).mean().iloc[-1] if len(df) >= 5 else None
+    indicators['SMA_10'] = df['Close'].rolling(window=10).mean().iloc[-1] if len(df) >= 10 else None # Added for swing
+    indicators['SMA_20'] = df['Close'].rolling(window=20).mean().iloc[-1] if len(df) >= 20 else None
+    indicators['SMA_50'] = df['Close'].rolling(window=50).mean().iloc[-1] if len(df) >= 50 else None
+    indicators['SMA_200'] = df['Close'].rolling(window=200).mean().iloc[-1] if len(df) >= 200 else None
+
+    # Relative Strength Index (RSI)
+    # pandas-ta handles data length checks internally
+    rsi_series = df.ta.rsi(length=14)
+    if rsi_series is not None and not rsi_series.empty:
+        indicators['RSI'] = rsi_series.iloc[-1]
+    else:
+        indicators['RSI'] = None
+
+    # Moving Average Convergence Divergence (MACD)
+    # pandas-ta returns a DataFrame for MACD
+    # Standard MACD (12,26,9) needs about 34 periods for full calculation.
+    # pandas-ta will return NaNs if data is insufficient.
+    macd_df = df.ta.macd(fast=12, slow=26, signal=9, append=False) # Use append=False to get only the MACD columns
+    if macd_df is not None and not macd_df.empty:
+        # Columns are typically named like 'MACD_12_26_9', 'MACDh_12_26_9', 'MACDs_12_26_9'
+        indicators['MACD'] = macd_df.iloc[-1].get(f'MACD_12_26_9')
+        indicators['MACD_Signal'] = macd_df.iloc[-1].get(f'MACDs_12_26_9')
+        indicators['MACD_Hist'] = macd_df.iloc[-1].get(f'MACDh_12_26_9') # Added histogram
+    else:
+        indicators['MACD'] = None
+        indicators['MACD_Signal'] = None
+        indicators['MACD_Hist'] = None
+
+    # Volume Simple Moving Average
+    indicators['Volume_SMA_5'] = df['Volume'].rolling(window=5).mean().iloc[-1] if len(df) >= 5 else None
+
+    return indicators
+
+# --- BASIC TECHNICAL ANALYSIS ---
+def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None) -> tuple:
+    """
+    Performs basic stock analysis based on technical indicators and news sentiment.
+    NOTE: This function is kept for compatibility with the basic analysis section in stock_app.py.
+    The comprehensive analysis is now handled by `enhanced_analysis` and `evaluate_stock`.
+
+    Args:
+        historical_data (pd.DataFrame): DataFrame with historical stock data.
+        news_sentiment (float, optional): Sentiment score of news (-1 to 1). Defaults to None.
+
+    Returns:
+        tuple: (Recommendation: str, Confidence: int, Reason: str)
+    """
+    if historical_data.empty:
+        return "Hold", 0, "Insufficient historical data for analysis."
+
+    technical_indicators = calculate_technical_indicators(historical_data)
+
+    buy_signals = 0
+    sell_signals = 0
+    hold_signals = 0
+    reasons = []    
+    
+    # SMA Crossover
+    sma_5 = technical_indicators.get('SMA_5')
+    sma_20 = technical_indicators.get('SMA_20')
+    if sma_5 is not None and sma_20 is not None:
+        if sma_5 > sma_20: # Bullish
+            buy_signals += 1
+            reasons.append("5-day SMA above 20-day SMA (Bullish Crossover)")
+        elif sma_5 < sma_20: # Bearish
+            sell_signals += 1
+            reasons.append("5-day SMA below 20-day SMA (Bearish Crossover)")
+        else:
+            hold_signals += 1
+            reasons.append("5-day and 20-day SMAs are close (Neutral Crossover)")
+
+    # RSI
+    rsi_value = technical_indicators.get('RSI') 
+    if rsi_value is not None:
+        if rsi_value < RSI_OVERSOLD_THRESHOLD: buy_signals += 1; reasons.append(f"RSI ({rsi_value:.2f}) indicates oversold condition")
+        elif rsi_value > RSI_OVERBOUGHT_THRESHOLD: sell_signals += 1; reasons.append(f"RSI ({rsi_value:.2f}) indicates overbought condition")
+        else: hold_signals += 1; reasons.append(f"RSI ({rsi_value:.2f}) is neutral")
+    # MACD
+    macd_value = technical_indicators.get('MACD')
+    macd_signal_value = technical_indicators.get('MACD_Signal')
+    if macd_value is not None and macd_signal_value is not None:
+        if macd_value > macd_signal_value:
+            buy_signals += 1 # Bullish crossover
+            reasons.append("MACD above MACD Signal (Bullish MACD Crossover)")
+        elif macd_value < macd_signal_value:
+            sell_signals += 1 # Bearish crossover
+            reasons.append("MACD below MACD Signal (Bearish MACD Crossover)")
+        else:
+            hold_signals += 1
+            reasons.append("MACD and MACD Signal are close (Neutral MACD)")
+
+    # News Sentiment
+    if news_sentiment is not None:
+        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1 (new threshold)
+            buy_signals += 1
+            reasons.append(f"Positive news sentiment ({news_sentiment:.2f})")
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0 (new threshold)
+            sell_signals += 1
+            reasons.append(f"Negative news sentiment ({news_sentiment:.2f})")
+        else: # Neutral
+            hold_signals += 1
+            reasons.append(f"Neutral news sentiment ({news_sentiment:.2f})")
+
+    total_signals = buy_signals + sell_signals + hold_signals 
+    if total_signals == 0: return "Hold", 0, "No conclusive signals from available data." 
+    if buy_signals > sell_signals: final_confidence = int((buy_signals / total_signals) * 100)
+    elif sell_signals > buy_signals: final_confidence = int((sell_signals / total_signals) * 100)
+    else: final_confidence = 50 # Neutral confidence
+    final_confidence = max(0, min(final_confidence, 100)) # Ensure it's within 0-100
+    if buy_signals > sell_signals and buy_signals >= hold_signals: return "Buy", final_confidence, "Primary signals suggest Buy: " + "; ".join(reasons)
+    elif sell_signals > buy_signals and sell_signals >= hold_signals: return "Sell", final_confidence, "Primary signals suggest Sell: " + "; ".join(reasons)
+    else: return "Hold", final_confidence, "Mixed or neutral signals: " + "; ".join(reasons)
+
+# --- CATEGORIZED SCORING ENGINE ---
+
+def _calculate_technical_score(technical_indicators: dict, historical_data: pd.DataFrame) -> tuple[float, dict]:
+    """Calculates a normalized technical score (0-100) and provides a breakdown."""
+    score = 50.0
+    breakdown = {}
+    
+    rsi_val = technical_indicators.get('RSI')
+    if rsi_val is not None:
+        if rsi_val < RSI_OVERSOLD_THRESHOLD:
+            points, details = 15, f"Oversold at {rsi_val:.2f}"
+        elif rsi_val > RSI_OVERBOUGHT_THRESHOLD:
+            points, details = -15, f"Overbought at {rsi_val:.2f}"
+        else:
+            points, details = 0, f"Neutral at {rsi_val:.2f}"
+        score += points
+        breakdown["RSI"] = {"points": points, "details": details}
+    
+    macd_val = technical_indicators.get('MACD')
+    macd_signal_val = technical_indicators.get('MACD_Signal')
+    if macd_val is not None and macd_signal_val is not None:
+        if macd_val > macd_signal_val:
+            points, details = 15, "Bullish"
+        elif macd_val < macd_signal_val:
+            points, details = -15, "Bearish"
+        else:
+            points, details = 0, "Neutral"
+        score += points
+        breakdown["MACD Crossover"] = {"points": points, "details": details}
+    
+    sma_5_val = technical_indicators.get('SMA_5')
+    sma_20_val = technical_indicators.get('SMA_20')
+    if sma_5_val is not None and sma_20_val is not None:
+        if sma_5_val > sma_20_val:
+            points, details = 10, "Bullish"
+        elif sma_5_val < sma_20_val:
+            points, details = -10, "Bearish"
+        else:
+            points, details = 0, "Neutral"
+        score += points
+        breakdown["Short-term SMA Cross"] = {"points": points, "details": details}
+    
+    sma_50_val = technical_indicators.get('SMA_50')
+    sma_200_val = technical_indicators.get('SMA_200')
+    if sma_50_val is not None and sma_200_val is not None:
+        if sma_50_val > sma_200_val:
+            points, details = 10, "Golden Cross"
+        else:
+            points, details = -15, "Death Cross"
+        score += points
+        breakdown["Long-term SMA Cross"] = {"points": points, "details": details}
+    
+    # Volume Activity
+    volume_sma_5 = technical_indicators.get('Volume_SMA_5')
+    current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
+    
+    if volume_sma_5 is not None and current_volume is not None:
+        if current_volume > volume_sma_5 * VOLUME_HIGH_THRESHOLD_MULTIPLIER:
+            points = 5
+            details = f"Current volume {current_volume:,.0f} significantly above 5-day SMA {volume_sma_5:,.0f}"
+        else:
+            points = 0
+            details = f"Current volume {current_volume:,.0f} near 5-day SMA {volume_sma_5:,.0f}"
+        score += points
+        breakdown["Volume Activity"] = {"points": points, "details": details}
+    else:
+        breakdown["Volume Activity"] = {"points": 0, "details": "N/A"}
+    return max(0, min(100, score)), breakdown
+
+def _calculate_fundamental_score(company_fundamentals: dict) -> tuple[float, dict]:
+    """Calculates a normalized fundamental score (0-100) and provides a breakdown."""
+    score = 50.0
+    breakdown = {}
+    
+    pe_ratio = company_fundamentals.get('trailingPE') if company_fundamentals else None
+    eps_growth = company_fundamentals.get('earningsGrowth') if company_fundamentals else None
+    
+    if pe_ratio is not None and not np.isinf(pe_ratio):
+        if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD:
+            points, details = 15, f"Undervalued at {pe_ratio:.2f}"
+        elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
+            points, details = -10, f"Overvalued at {pe_ratio:.2f}"
+        else:
+            points, details = 0, f"Neutral at {pe_ratio:.2f}"
+        score += points
+        breakdown["P/E Ratio"] = {"points": points, "details": details}
+    
+    if eps_growth is not None:
+        if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
+            points, details = 25, f"Strong at {eps_growth:.2%}"
+        elif eps_growth < -0.30:
+            points, details = -30, f"Decline at {eps_growth:.2%}"
+        elif eps_growth < 0:
+            points, details = -15, f"Negative at {eps_growth:.2%}"
+        else:
+            points, details = 0, f"Neutral at {eps_growth:.2%}"
+        score += points
+        breakdown["EPS Growth"] = {"points": points, "details": details}
+    
+    # Return on Equity (ROE)
+    return_on_equity = company_fundamentals.get('returnOnEquity')
+    if return_on_equity is not None:
+        if return_on_equity > ROE_GOOD_THRESHOLD: # e.g., > 15%
+            points, details = 15, f"Strong at {return_on_equity:.2%}"
+        elif return_on_equity < 0: # Negative ROE
+            points, details = -15, f"Negative at {return_on_equity:.2%}"
+        else:
+            points, details = 0, f"Neutral at {return_on_equity:.2%}"
+        score += points
+        breakdown["Return on Equity (ROE)"] = {"points": points, "details": details}
+    else:
+        breakdown["Return on Equity (ROE)"] = {"points": 0, "details": "N/A"}
+    
+    # Debt to Equity
+    debt_to_equity = company_fundamentals.get('debtToEquity')
+    if debt_to_equity is not None and not np.isinf(debt_to_equity):
+        if debt_to_equity < DEBT_TO_EQUITY_LOW_THRESHOLD: # e.g., < 0.5
+            points, details = 10, f"Low Debt at {debt_to_equity:.2f}"
+        elif debt_to_equity > DEBT_TO_EQUITY_HIGH_THRESHOLD: # e.g., > 1.5
+            points, details = -10, f"High Debt at {debt_to_equity:.2f}"
+        else:
+            points, details = 0, f"Moderate Debt at {debt_to_equity:.2f}"
+        score += points
+        breakdown["Debt to Equity"] = {"points": points, "details": details}
+    else:
+        breakdown["Debt to Equity"] = {"points": 0, "details": "N/A"}
+    
+    return max(0, min(100, score)), breakdown
+
+def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dict]:
+    """Calculates a normalized sentiment score (0-100) and provides a breakdown."""
+    score = 50.0
+    breakdown = {}
+    
+    if news_sentiment is not None: # Sentiment rule: <0 = Negative, 0-0.1 = Neutral, >0.1 = Positive
+        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
+            points = 20 # Positive impact
+            sentiment_label = "Positive"
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
+            points = -20 # Negative impact
+            sentiment_label = "Negative"
+        else: # 0.0 to 0.1 (inclusive of 0.0)
+            points = 0
+            sentiment_label = "Neutral"
+        score += points
+        breakdown["Overall News Sentiment"] = {"points": points, "details": f"{news_sentiment:.2f} ({sentiment_label})"}
+    else:
+        breakdown["Overall News Sentiment"] = {"points": 0, "details": "N/A"}
+    
+    return max(0, min(100, score)), breakdown
+
 # --- DYNAMIC ALERTS GENERATION ---
 def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None,
-                            sma_200: float | None, current_price: float | None, # Removed unused sma_50, sma_200 from here as they are not used in alerts
+                            sma_200: float | None, current_price: float | None,
                             news_sentiment: float | None, ath_price: float | None) -> list[str]:
     """
     Generates dynamic alerts based on various technical and sentiment conditions.
