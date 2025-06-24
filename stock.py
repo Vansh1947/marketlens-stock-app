@@ -913,10 +913,10 @@ def get_source_weight(source_name: str) -> float:
     if "google news" in normalized_name: return SOURCE_WEIGHTS["Google News"] # For GNews/RSS
     return SOURCE_WEIGHTS.get(source_name, SOURCE_WEIGHTS["Unknown Blog"])
 
-def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float]], list[str]]:
+def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float, list[str]]], list[str]]:
     """
     Fetches recent news articles for a given ticker symbol from NewsAPI
-    filters them, and returns a list of (sentiment, weight) tuples and titles.
+    filters them, and returns a list of (sentiment, weight, themes) tuples and titles.
     """
     if not api_key:
         logger.warning("NewsAPI key not provided. Skipping NewsAPI fetch.")
@@ -927,7 +927,7 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, c
         return [], []
 
     newsapi_client = NewsApiClient(api_key=api_key)
-    weighted_sentiments = [] # List of (sentiment, weight) tuples
+    results = [] # List of (sentiment, weight, themes) tuples
     news_titles = []
     try:
         # Fetch news from the last 7 days (free tier usually limits to 30 days history)
@@ -950,14 +950,16 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, c
                 article_text = title + " " + description
                 
                 if is_stock_mentioned(article_text, ticker_symbol, company_name):
-                    sentiment = analyze_sentiment(article_text)
+                    raw_sentiment = analyze_sentiment(article_text)
+                    keyword_sentiment, matched_themes = analyze_news_keywords(article_text)
+                    combined_sentiment = max(-1.0, min(1.0, raw_sentiment + keyword_sentiment))
                     weight = get_source_weight(source_name)
-                    weighted_sentiments.append((sentiment, weight))
+                    results.append((combined_sentiment, weight, matched_themes))
                     news_titles.append(title)
             
-            if weighted_sentiments:
+            if results:
                 logger.info(f"Fetched {len(news_titles)} relevant articles from NewsAPI for {ticker_symbol}.")
-                return weighted_sentiments, news_titles # Return list of (sentiment, weight)
+                return results, news_titles
         logger.info(f"No relevant news found for {ticker_symbol} from NewsAPI.")
         return [], []
     except NewsAPIException as e: # type: ignore [misc] # misc because NewsAPIException could be the mock
@@ -1013,15 +1015,15 @@ def is_stock_mentioned(news_article_text: str, ticker: str, company_name: str | 
     
     return bool(combined_pattern.search(news_article_text))
 
-def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str, company_name: str | None) -> tuple[list[tuple[float, float]], list[str]]:
+def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str, company_name: str | None) -> tuple[list[tuple[float, float, list[str]]], list[str]]:
     """
     Fetches news from an RSS feed, filters by ticker symbol,
-    and returns a list of (sentiment, weight) tuples and titles.
+    and returns a list of (sentiment, weight, themes) tuples and titles.
     """
     if feedparser is None:
         return [], []
 
-    weighted_sentiments = []
+    results = []
     news_titles = []
     try:
         feed = feedparser.parse(rss_url)
@@ -1035,21 +1037,23 @@ def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str, company_name
             article_text = title + " " + summary
 
             if is_stock_mentioned(article_text, ticker_symbol, company_name):
-                sentiment = analyze_sentiment(article_text)
+                raw_sentiment = analyze_sentiment(article_text)
+                keyword_sentiment, matched_themes = analyze_news_keywords(article_text)
+                combined_sentiment = max(-1.0, min(1.0, raw_sentiment + keyword_sentiment))
                 weight = get_source_weight(source_name)
-                weighted_sentiments.append((sentiment, weight))
+                results.append((combined_sentiment, weight, matched_themes))
                 news_titles.append(title)
 
-        if weighted_sentiments:
+        if results:
             logger.info(f"Fetched {len(news_titles)} relevant articles from RSS for {ticker_symbol}.")
-            return weighted_sentiments, news_titles # Return list of (sentiment, weight)
+            return results, news_titles
         logger.info(f"No relevant news found for {ticker_symbol} in RSS feed.")
         return [], []
     except Exception as e:
         logger.error(f"Error fetching RSS news from {rss_url}: {e}")
         return [], []
 
-def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float]], list[str]]: # type: ignore
+def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float, list[str]]], list[str]]: # type: ignore
     """
     Fetches news for a given ticker symbol from GNews and calculates sentiment.
         ticker_symbol (str): The stock ticker symbol (often for .NS market).
@@ -1064,7 +1068,7 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, com
         return [], [] # Return empty list of (sentiment, weight)
     
     query = f"{ticker_symbol} stock news"
-    weighted_sentiments = []
+    results = []
     news_titles = []
     try:
         # Assuming gnews_client.get_news(query) returns a list of article-like objects
@@ -1081,13 +1085,15 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, com
                 source_name = item.get('publisher', {}).get('title', 'Google News') # Default to Google News
                 article_text = title + " " + description
                 if is_stock_mentioned(article_text, ticker_symbol, company_name):
-                    sentiment = analyze_sentiment(article_text)
+                    raw_sentiment = analyze_sentiment(article_text)
+                    keyword_sentiment, matched_themes = analyze_news_keywords(article_text)
+                    combined_sentiment = max(-1.0, min(1.0, raw_sentiment + keyword_sentiment))
                     weight = get_source_weight(source_name)
-                    weighted_sentiments.append((sentiment, weight))
+                    results.append((combined_sentiment, weight, matched_themes))
                     news_titles.append(title)
-            if weighted_sentiments:
+            if results:
                 logger.info(f"Fetched {len(news_titles)} relevant articles from GNews for {ticker_symbol}.")
-                return weighted_sentiments, news_titles # Return list of (sentiment, weight)
+                return results, news_titles
         logger.info(f"No relevant news found for {ticker_symbol} from GNews.")
         return [], []
     except Exception as e:
