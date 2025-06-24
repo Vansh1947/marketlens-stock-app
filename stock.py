@@ -1,13 +1,15 @@
 """
 This module provides comprehensive stock analysis functionalities, including
 data fetching, technical indicator calculation, sentiment analysis from news,
-and generating trading recommendations.
+and generating trading recommendations. It also includes dynamic alert generation
+and refined news sentiment analysis with source weighting.
 """
 import os
 import pandas as pd
 import numpy as np
 from textblob import TextBlob
 from datetime import datetime, timedelta
+import re # Added for regex in news filtering
 
 
 # Conditional imports for external APIs
@@ -62,8 +64,6 @@ except ImportError:
 # export OPENAI_API_KEY="sk-proj-..."
 # stock.py will now only read from environment variables if run directly
 
-# --- END OF THRESHOLDS ---
-
 # Initialize GNews client
 gnews_client = None # Initialize to None
 if GNews:  # Check if the GNews library is installed
@@ -104,6 +104,29 @@ LT_PE_BUY_THRESHOLD = 40
 LT_EPS_GROWTH_BUY_THRESHOLD = 0.0 # EPS Growth > 0
 LT_ROE_BUY_THRESHOLD = 0.15 # 15%
 LT_DE_BUY_THRESHOLD = 0.80 # 80%
+
+# New Alert Thresholds (can be refined)
+MACD_HIST_BULLISH_THRESHOLD = 0.5
+MACD_HIST_BEARISH_THRESHOLD = -0.5
+PRICE_NEAR_ATH_THRESHOLD = 0.95 # 95% of ATH
+NEWS_SENTIMENT_STRONG_NEGATIVE_THRESHOLD = -0.4
+NEWS_SENTIMENT_STRONG_POSITIVE_THRESHOLD = 0.4
+
+# New News Refinement Constants
+SOURCE_WEIGHTS = {
+    "Bloomberg": 1.0,
+    "Reuters": 0.9,
+    "CNBC": 0.8,
+    "The Wall Street Journal": 0.95,
+    "Associated Press": 0.85,
+    "Yahoo Finance": 0.7,
+    "MarketWatch": 0.7,
+    "Seeking Alpha": 0.6,
+    "Reddit": 0.4,
+    "Unknown Blog": 0.2,
+    "Google News": 0.7, # Default for GNews/RSS if specific source not found
+    "NewsAPI": 0.7, # Default for NewsAPI if specific source not found
+}
 
 # --- END OF THRESHOLDS ---
 
@@ -245,6 +268,7 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
 
     # Simple Moving Averages
     indicators['SMA_5'] = df['Close'].rolling(window=5).mean().iloc[-1] if len(df) >= 5 else None
+    indicators['SMA_10'] = df['Close'].rolling(window=10).mean().iloc[-1] if len(df) >= 10 else None # Added for swing
     indicators['SMA_20'] = df['Close'].rolling(window=20).mean().iloc[-1] if len(df) >= 20 else None
     indicators['SMA_50'] = df['Close'].rolling(window=50).mean().iloc[-1] if len(df) >= 50 else None
     indicators['SMA_200'] = df['Close'].rolling(window=200).mean().iloc[-1] if len(df) >= 200 else None
@@ -281,6 +305,8 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
 def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -> tuple:
     """
     Performs basic stock analysis based on technical indicators and news sentiment.
+    NOTE: This function is kept for compatibility with the basic analysis section in stock_app.py.
+    The comprehensive analysis is now handled by `enhanced_analysis` and `evaluate_stock`.
 
     Args:
         historical_data (pd.DataFrame): DataFrame with historical stock data.
@@ -298,12 +324,7 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
     sell_signals = 0
     hold_signals = 0
     reasons = []    
-    # company_fundamentals is not used in basic analysis, but passed for consistency
-    # with enhanced_analysis signature if it were to be extended.
-    # The enhanced_analysis will have full fundamentals.
-    # For basic, we'll just pass an empty dict if not available.
-    company_fundamentals_for_basic = {} # Placeholder for basic analysis
-
+    
     # SMA Crossover
     sma_5 = technical_indicators.get('SMA_5')
     sma_20 = technical_indicators.get('SMA_20')
@@ -319,7 +340,7 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
             reasons.append("5-day and 20-day SMAs are close (Neutral Crossover)")
 
     # RSI
-    rsi_value = technical_indicators.get('RSI') # No change here, logic is fine
+    rsi_value = technical_indicators.get('RSI') 
     if rsi_value is not None:
         if rsi_value < RSI_OVERSOLD_THRESHOLD: buy_signals += 1; reasons.append(f"RSI ({rsi_value:.2f}) indicates oversold condition")
         elif rsi_value > RSI_OVERBOUGHT_THRESHOLD: sell_signals += 1; reasons.append(f"RSI ({rsi_value:.2f}) indicates overbought condition")
@@ -350,8 +371,8 @@ def analyze_stock(historical_data: pd.DataFrame, news_sentiment: float = None) -
             hold_signals += 1
             reasons.append(f"Neutral news sentiment ({news_sentiment:.2f})")
 
-    total_signals = buy_signals + sell_signals + hold_signals # No change here, logic is fine
-    if total_signals == 0: return "Hold", 0, "No conclusive signals from available data." # Default confidence to 0 if no signals
+    total_signals = buy_signals + sell_signals + hold_signals 
+    if total_signals == 0: return "Hold", 0, "No conclusive signals from available data." 
     if buy_signals > sell_signals: final_confidence = int((buy_signals / total_signals) * 100)
     elif sell_signals > buy_signals: final_confidence = int((sell_signals / total_signals) * 100)
     else: final_confidence = 50 # Neutral confidence
@@ -489,20 +510,17 @@ def _calculate_fundamental_score(company_fundamentals: dict) -> tuple[float, dic
     
     return max(0, min(100, score)), breakdown
 
-def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dict, list]:
-    """Calculates a normalized sentiment score (0-100) and provides a breakdown and alerts."""
+def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dict]:
+    """Calculates a normalized sentiment score (0-100) and provides a breakdown."""
     score = 50.0
     breakdown = {}
-    alerts = []
     
     if news_sentiment is not None: # Sentiment rule: <0 = Negative, 0-0.1 = Neutral, >0.1 = Positive
         if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
             points = 20 # Positive impact
-            alerts.append(f"Notice: Positive news sentiment detected ({news_sentiment:.2f}).")
             sentiment_label = "Positive"
         elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
             points = -20 # Negative impact
-            alerts.append(f"Alert: Negative news sentiment detected ({news_sentiment:.2f}).")
             sentiment_label = "Negative"
         else: # 0.0 to 0.1 (inclusive of 0.0)
             points = 0
@@ -512,7 +530,52 @@ def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dic
     else:
         breakdown["Overall News Sentiment"] = {"points": 0, "details": "N/A"}
     
-    return max(0, min(100, score)), breakdown, alerts
+    return max(0, min(100, score)), breakdown
+
+# --- DYNAMIC ALERTS GENERATION ---
+def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_50: float | None,
+                            sma_200: float | None, current_price: float | None,
+                            news_sentiment: float | None, ath_price: float | None) -> list[str]:
+    """
+    Generates dynamic alerts based on various technical and sentiment conditions.
+    """
+    alerts = []
+
+    # RSI Alerts
+    if rsi is not None:
+        if rsi < RSI_OVERSOLD_THRESHOLD: # RSI < 30
+            alerts.append("🔻 Oversold – possible rebound soon.")
+        elif rsi > RSI_OVERBOUGHT_THRESHOLD: # RSI > 70
+            alerts.append("⚠️ Overbought – price may drop soon.")
+    
+    # MACD Alerts (using histogram for crossover detection)
+    if macd_hist is not None:
+        if macd_hist < MACD_HIST_BEARISH_THRESHOLD: # MACD line crosses below signal
+            alerts.append("🧨 Bearish MACD crossover.")
+        elif macd_hist > MACD_HIST_BULLISH_THRESHOLD: # MACD line crosses above signal
+            alerts.append("🚀 Bullish MACD crossover.")
+
+    # SMA Alerts (Golden/Death Cross)
+    if sma_50 is not None and sma_200 is not None:
+        if sma_50 < sma_200:
+            alerts.append("☠️ Death Cross detected – bearish signal.")
+        elif sma_50 > sma_200:
+            alerts.append("✨ Golden Cross detected – bullish signal.")
+
+    # Price Action Alerts (Near ATH)
+    if current_price is not None and ath_price is not None and ath_price > 0:
+        if current_price >= PRICE_NEAR_ATH_THRESHOLD * ath_price:
+            alerts.append("📈 Near 1-year high – check valuation.")
+
+    # News Sentiment Alerts
+    if news_sentiment is not None:
+        if news_sentiment < NEWS_SENTIMENT_STRONG_NEGATIVE_THRESHOLD: # sentiment < -0.4
+            alerts.append("📰 Negative news trend – caution advised.")
+        elif news_sentiment > NEWS_SENTIMENT_STRONG_POSITIVE_THRESHOLD: # sentiment > 0.4
+            alerts.append("📢 Positive sentiment momentum – market optimism.")
+
+    return alerts
+
 
 # --- DUAL RECOMMENDATION SYSTEM ---
 def evaluate_swing(data: dict) -> dict:
@@ -521,66 +584,122 @@ def evaluate_swing(data: dict) -> dict:
     """
     # Extract data, providing defaults for safety
     sma_5 = data.get("SMA_5")
-    sma_20 = data.get("SMA_20")
+    sma_10 = data.get("SMA_10") # Added for swing
     rsi = data.get("RSI")
     macd = data.get("MACD")
     macd_signal = data.get("MACD_Signal")
+    macd_hist = data.get("MACD_Hist") # For histogram slope
+    volume_sma_5 = data.get("Volume_SMA_5")
+    current_volume = data.get("current_volume")
     sentiment = data.get("sentiment", 0.0)
     current_price = data.get("current_price")
     ath = data.get("ATH")
+    all_alerts = data.get("all_alerts", [])
 
-    recommendation = "Hold (Swing)"
-    swing_score = 10 # Base score for hold
-    alert = "ℹ️ No strong short-term signals"
-
+    recommendation = "Hold"
+    swing_specific_alerts = []
+    
     # Check if critical data is missing for a meaningful analysis
-    if any(x is None for x in [sma_5, sma_20, rsi, macd, macd_signal, current_price, ath]):
+    if any(x is None for x in [sma_5, sma_10, rsi, macd, macd_signal, macd_hist, volume_sma_5, current_volume, current_price, ath]):
         return {
-            "recommendation": "Hold (Swing)",
-            "confidence": 0,
-            "alert": "⚠️ Insufficient data for swing analysis"
+            "recommendation": "Hold",
+            "confidence": 0, 
+            "alerts": ["⚠️ Insufficient data for swing analysis"]
         }
 
-    # Buy Conditions
-    if (
-        sma_5 > sma_20 and
-        SWING_RSI_LOWER_BUY < rsi < SWING_RSI_UPPER_BUY and
-        macd > macd_signal and
-        sentiment > SWING_SENTIMENT_BUY_THRESHOLD and
-        current_price < (ath * SWING_ATH_DISCOUNT_BUY)
-    ):
-        recommendation = "Buy (Swing)"
-        swing_score = 20 # Base for buy
-        if rsi < 35: # Specific RSI for stronger signal
-            alert = "🔔 Possible reversal setup detected (RSI low)"
-        if (ath - current_price) / ath > 0.1: # Significant discount from ATH
-            alert = "🔔 Strong discount from all-time high"
-    
-    # Sell Conditions
-    elif (
-        sma_5 < sma_20 and
-        rsi > SWING_RSI_SELL and
-        macd < macd_signal and
-        sentiment < SWING_SENTIMENT_SELL_THRESHOLD and
-        current_price >= ath * SWING_ATH_PREMIUM_SELL
-    ):
-        recommendation = "Sell (Swing)"
-        swing_score = 20 # Base for sell
-        alert = "⚠️ Price is near all-time high with overbought signals"
-    
-    # Confidence Calculation (0 to 100)
-    if recommendation == "Buy (Swing)":
-        swing_score += (SWING_RSI_UPPER_BUY - rsi) + (sentiment * 50)
-    elif recommendation == "Sell (Swing)":
-        swing_score += (rsi - SWING_RSI_SELL) + abs(sentiment * 50)
-    # For "Hold", swing_score remains 10
+    # --- Calculate individual factor scores (-1 to +1) ---
+    scores = {}
 
-    confidence = min(int(swing_score), 100)
+    # MACD Score (30%)
+    macd_score = 0
+    if macd is not None and macd_signal is not None:
+        if macd > macd_signal and macd_hist > 0: # Bullish crossover with positive histogram
+            macd_score = 1
+        elif macd < macd_signal and macd_hist < 0: # Bearish crossover with negative histogram
+            macd_score = -1
+        elif macd > macd_signal: # Bullish crossover, but histogram might be flattening
+            macd_score = 0.5
+        elif macd < macd_signal: # Bearish crossover, but histogram might be flattening
+            macd_score = -0.5
+    scores["MACD"] = macd_score
+
+    # RSI Score (20%)
+    rsi_score = 0
+    if rsi is not None:
+        if rsi < RSI_OVERSOLD_THRESHOLD:
+            rsi_score = 1 # Oversold, potential rebound
+        elif rsi > RSI_OVERBOUGHT_THRESHOLD:
+            rsi_score = -1 # Overbought, potential drop
+        elif rsi >= 50:
+            rsi_score = 0.5 # Bullish momentum
+        elif rsi < 50:
+            rsi_score = -0.5 # Bearish momentum
+    scores["RSI"] = rsi_score
+
+    # SMA_10 Score (20%) - Using SMA_5 / SMA_10 cross
+    sma_10_score = 0
+    if sma_5 is not None and sma_10 is not None:
+        if sma_5 > sma_10:
+            sma_10_score = 1 # Bullish short-term cross
+        elif sma_5 < sma_10:
+            sma_10_score = -1 # Bearish short-term cross
+    scores["SMA_10"] = sma_10_score
+
+    # Volume Score (10%) - Volume Spike
+    volume_score = 0
+    if current_volume is not None and volume_sma_5 is not None:
+        if current_volume > volume_sma_5 * VOLUME_HIGH_THRESHOLD_MULTIPLIER:
+            volume_score = 1 # High volume confirms trend
+        elif current_volume < volume_sma_5 * 0.5: # Very low volume
+            volume_score = -0.5 # Lack of interest/momentum
+    scores["Volume"] = volume_score
+
+    # News Sentiment Score (20%)
+    sentiment_score = 0
+    if sentiment is not None:
+        if sentiment > POSITIVE_SENTIMENT_THRESHOLD:
+            sentiment_score = 1
+        elif sentiment < NEGATIVE_SENTIMENT_THRESHOLD:
+            sentiment_score = -1
+    scores["News"] = sentiment_score
+
+    # --- Calculate weighted sum and final confidence ---
+    weighted_sum = (
+        scores["MACD"] * 0.30 +
+        scores["RSI"] * 0.20 +
+        scores["SMA_10"] * 0.20 +
+        scores["Volume"] * 0.10 +
+        scores["News"] * 0.20
+    )
+    
+    # Scale to 0-100: sum(weighted_scores) * 50 + 50
+    confidence = int(weighted_sum * 50 + 50)
+    confidence = max(0, min(100, confidence)) # Ensure 0-100 range
+
+    # --- Determine Recommendation ---
+    if confidence >= 70:
+        recommendation = "Buy"
+    elif confidence <= 30:
+        recommendation = "Sell"
+    else:
+        recommendation = "Hold"
+
+    # --- Filter relevant alerts ---
+    for alert in all_alerts:
+        if any(keyword in alert for keyword in ["RSI", "MACD", "Oversold", "Overbought", "Bullish", "Bearish", "Positive sentiment", "Negative news trend"]):
+            swing_specific_alerts.append(alert)
+    
+    if not swing_specific_alerts and recommendation == "Hold":
+        swing_specific_alerts.append("ℹ️ No strong short-term signals for swing trading.")
+    elif not swing_specific_alerts and recommendation == "Buy":
+        swing_specific_alerts.append("🔔 Strong swing buy signals detected.")
+    elif not swing_specific_alerts and recommendation == "Sell":
+        swing_specific_alerts.append("⚠️ Strong swing sell signals detected.")
 
     return {
         "recommendation": recommendation,
         "confidence": confidence,
-        "alert": alert
+        "alerts": swing_specific_alerts
     }
 
 def evaluate_long_term(data: dict) -> dict:
@@ -595,70 +714,107 @@ def evaluate_long_term(data: dict) -> dict:
     roe = data.get("ROE")
     d_e_ratio = data.get("D_E_ratio")
     sentiment = data.get("sentiment", 0.0)
-    current_price = data.get("current_price")
-    ath = data.get("ATH")
-
-    recommendation = "Hold (Long-Term)"
-    long_term_score = 10 # Base score for hold
-    alert = "ℹ️ Fundamentals are stable but not ideal for action"
-
-    # Define internal thresholds for sell conditions (derived from your prompt)
-    LT_EPS_GROWTH_SELL_THRESHOLD = 0.0 # EPS Growth < 0
-    LT_PE_SELL_THRESHOLD = 45
-    LT_ROE_SELL_THRESHOLD = 0.10 # 10%
-    LT_DE_SELL_THRESHOLD = 1.20 # 120%
-    LT_ATH_PREMIUM_SELL = 0.98 # Current price >= 98% of ATH
+    all_alerts = data.get("all_alerts", [])
+    
+    recommendation = "Hold"
+    long_term_specific_alerts = []
 
     # Check if critical data is missing for a meaningful analysis
-    if any(x is None for x in [sma_50, sma_200, pe_ratio, eps_growth, roe, d_e_ratio, current_price, ath]):
+    if any(x is None for x in [sma_50, sma_200, pe_ratio, eps_growth, roe, d_e_ratio]):
         return {
-            "recommendation": "Hold (Long-Term)",
+            "recommendation": "Hold",
             "confidence": 0,
-            "alert": "⚠️ Insufficient data for long-term analysis"
+            "alerts": ["⚠️ Insufficient data for long-term analysis"]
         }
 
-    # Buy Conditions
-    if (
-        sma_50 > sma_200 and
-        eps_growth > LT_EPS_GROWTH_BUY_THRESHOLD and
-        pe_ratio < LT_PE_BUY_THRESHOLD and
-        roe > LT_ROE_BUY_THRESHOLD and
-        d_e_ratio < LT_DE_BUY_THRESHOLD and
-        current_price < (ath * SWING_ATH_DISCOUNT_BUY) # Reusing SWING_ATH_DISCOUNT_BUY for consistency
-    ):
-        recommendation = "Buy (Long-Term)"
-        long_term_score = 20 # Base for buy
-        if (ath - current_price) / ath > 0.15:
-            alert = "📈 Stock is undervalued compared to ATH"
-    
-    # Sell Conditions
-    elif (
-        sma_50 < sma_200 or
-        eps_growth < LT_EPS_GROWTH_SELL_THRESHOLD or
-        pe_ratio > LT_PE_SELL_THRESHOLD or
-        roe < LT_ROE_SELL_THRESHOLD or
-        d_e_ratio > LT_DE_SELL_THRESHOLD or
-        current_price >= ath * LT_ATH_PREMIUM_SELL
-    ):
-        recommendation = "Sell (Long-Term)"
-        long_term_score = 20 # Base for sell
-        alert = "⚠️ Deteriorating financials or overvaluation near ATH"
-    
-    # Confidence Calculation (0 to 100)
-    if recommendation == "Buy (Long-Term)":
-        long_term_score += (roe * 100) + (eps_growth * 100) + (LT_PE_BUY_THRESHOLD - pe_ratio)
-        long_term_score += max(0, (ath - current_price) / ath * 100)
-    elif recommendation == "Sell (Long-Term)":
-        long_term_score += pe_ratio + (d_e_ratio * 100 if d_e_ratio is not None and d_e_ratio > LT_DE_SELL_THRESHOLD else 0) # Penalize high D/E
-        long_term_score += abs(min(0, eps_growth)) * 50 # Scale negative EPS growth impact
-    # For "Hold", long_term_score remains 10
+    # --- Calculate individual factor scores (-1 to +1) ---
+    scores = {}
 
-    confidence = min(int(long_term_score), 100)
+    # SMA_200 Score (30%) - Golden/Death Cross
+    sma_200_score = 0
+    if sma_50 is not None and sma_200 is not None:
+        if sma_50 > sma_200:
+            sma_200_score = 1 # Golden Cross
+        elif sma_50 < sma_200:
+            sma_200_score = -1 # Death Cross
+    scores["SMA_200"] = sma_200_score
+
+    # P/E Valuation Check Score (30%)
+    pe_score = 0
+    if pe_ratio is not None and not np.isinf(pe_ratio):
+        if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD:
+            pe_score = 1 # Undervalued
+        elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
+            pe_score = -1 # Overvalued
+        elif pe_ratio >= PE_RATIO_UNDERVALUED_THRESHOLD and pe_ratio <= PE_RATIO_OVERVALUED_THRESHOLD:
+            pe_score = 0 # Neutral
+    scores["P/E Valuation"] = pe_score
+
+    # Growth (EPS/Revenue) Score (20%)
+    growth_score = 0
+    if eps_growth is not None:
+        if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
+            growth_score = 1 # Strong growth
+        elif eps_growth < EPS_GROWTH_NEGATIVE_THRESHOLD:
+            growth_score = -1 # Negative growth
+        elif eps_growth >= 0:
+            growth_score = 0.5 # Positive but not strong
+        elif eps_growth < 0:
+            growth_score = -0.5 # Negative but not severe
+    scores["Growth"] = growth_score
+
+    # Long-term News Sentiment Score (20%)
+    sentiment_score = 0
+    if sentiment is not None:
+        if sentiment > NEWS_SENTIMENT_STRONG_POSITIVE_THRESHOLD:
+            sentiment_score = 1
+        elif sentiment < NEWS_SENTIMENT_STRONG_NEGATIVE_THRESHOLD:
+            sentiment_score = -1
+    scores["News Sentiment"] = sentiment_score
+
+    # --- Calculate weighted sum and final confidence ---
+    weighted_sum = (
+        scores["SMA_200"] * 0.30 +
+        scores["P/E Valuation"] * 0.30 +
+        scores["Growth"] * 0.20 +
+        scores["News Sentiment"] * 0.20
+    )
+
+    # Scale to 0-100: sum(weighted_scores) * 50 + 50
+    confidence = int(weighted_sum * 50 + 50)
+    
+    # Cap at 85% max unless all factors are strongly aligned (all scores are 1)
+    if all(s == 1 for s in scores.values()):
+        confidence = min(100, confidence) # Allow 100% if all perfect
+    else:
+        confidence = min(85, confidence) # Cap at 85% otherwise
+    
+    confidence = max(0, min(100, confidence)) # Ensure 0-100 range
+
+    # --- Determine Recommendation ---
+    if confidence >= 70:
+        recommendation = "Buy"
+    elif confidence <= 30:
+        recommendation = "Sell"
+    else:
+        recommendation = "Hold"
+
+    # --- Filter relevant alerts ---
+    for alert in all_alerts:
+        if any(keyword in alert for keyword in ["Golden Cross", "Death Cross", "Near 1-year high", "Negative news trend", "Positive sentiment momentum"]):
+            long_term_specific_alerts.append(alert)
+    
+    if not long_term_specific_alerts and recommendation == "Hold":
+        long_term_specific_alerts.append("ℹ️ Fundamentals are stable but not ideal for long-term action.")
+    elif not long_term_specific_alerts and recommendation == "Buy":
+        long_term_specific_alerts.append("📈 Strong long-term buy signals detected.")
+    elif not long_term_specific_alerts and recommendation == "Sell":
+        long_term_specific_alerts.append("⚠️ Strong long-term sell signals detected.")
 
     return {
         "recommendation": recommendation,
         "confidence": confidence,
-        "alert": alert
+        "alerts": long_term_specific_alerts
     }
 
 def evaluate_stock(
@@ -672,15 +828,28 @@ def evaluate_stock(
     """
     Orchestrates the dual recommendation system for swing traders and long-term investors.
     """
-    # Prepare data dictionary for the new evaluation functions
+    # Extract data for dynamic alerts
+    rsi = technical_indicators.get('RSI')
+    macd_hist = technical_indicators.get('MACD_Hist')
+    sma_50 = technical_indicators.get('SMA_50')
+    sma_200 = technical_indicators.get('SMA_200')
+
+    # Generate all dynamic alerts once
+    all_dynamic_alerts = generate_dynamic_alerts(rsi, macd_hist, sma_50, sma_200,
+                                                 current_price, overall_news_sentiment, all_time_high)
+
     data_for_eval = {
         "SMA_5": technical_indicators.get('SMA_5'),
+        "SMA_10": technical_indicators.get('SMA_10'), # Added for swing
         "SMA_20": technical_indicators.get('SMA_20'),
         "SMA_50": technical_indicators.get('SMA_50'),
         "SMA_200": technical_indicators.get('SMA_200'),
         "RSI": technical_indicators.get('RSI'),
         "MACD": technical_indicators.get('MACD'),
         "MACD_Signal": technical_indicators.get('MACD_Signal'),
+        "MACD_Hist": technical_indicators.get('MACD_Hist'), # Added for swing
+        "Volume_SMA_5": technical_indicators.get('Volume_SMA_5'),
+        "current_volume": historical_data['Volume'].iloc[-1] if not historical_data.empty else None, # Pass current volume
         "PE_ratio": company_fundamentals.get('trailingPE'),
         "EPS_growth": company_fundamentals.get('earningsGrowth'),
         "ROE": company_fundamentals.get('returnOnEquity'),
@@ -688,8 +857,9 @@ def evaluate_stock(
         "sentiment": overall_news_sentiment,
         "current_price": current_price,
         "ATH": all_time_high,
+        "all_alerts": all_dynamic_alerts # Pass all alerts to sub-functions
     }
-
+    
     swing_result = evaluate_swing(data_for_eval)
     long_term_result = evaluate_long_term(data_for_eval)
 
@@ -702,14 +872,16 @@ def evaluate_stock(
 def enhanced_analysis(historical_data: pd.DataFrame, technical_indicators: dict, company_fundamentals: dict, news_sentiment: float | None) -> tuple:
     """
     Performs an enhanced, categorized, and simplified stock analysis.
+    This function now focuses on providing category scores and breakdowns,
+    while the main recommendations are handled by `evaluate_stock`.
 
     Returns:
-        tuple: (Recommendation, Confidence_Level, Alerts, Master_Breakdown, Category_Scores, Final_Score_Value)
+        tuple: (Master_Breakdown, Category_Scores, Final_Score_Value)
     """
     # 1. Calculate scores for each category
     tech_score, tech_breakdown = _calculate_technical_score(technical_indicators, historical_data)
     fund_score, fund_breakdown = _calculate_fundamental_score(company_fundamentals)
-    sent_score, sent_breakdown, alerts = _calculate_sentiment_score(news_sentiment)
+    sent_score, sent_breakdown = _calculate_sentiment_score(news_sentiment) # Alerts are now generated by generate_dynamic_alerts
 
     category_scores = {
         "Technical": tech_score,
@@ -718,21 +890,18 @@ def enhanced_analysis(historical_data: pd.DataFrame, technical_indicators: dict,
     }
 
     # 2. Calculate final weighted score (using a simple average, no sector-specific weights)
-    # This simplifies the logic as requested.
     final_score_value = (tech_score + fund_score + sent_score) / 3
 
-    # 3. Classify recommendation and calculate confidence
-    recommendation = classify_recommendation(final_score_value)
-    confidence_level = _calculate_confidence_level(technical_indicators, company_fundamentals, news_sentiment, historical_data)
-
-    # 4. Combine all breakdowns for a full report
+    # 3. Combine all breakdowns for a full report
     master_breakdown = {
         "Technical Analysis": tech_breakdown,
         "Fundamental Analysis": fund_breakdown,
         "Sentiment Analysis": sent_breakdown,
     }
 
-    return recommendation, confidence_level, alerts, master_breakdown, category_scores, final_score_value
+    # Note: Recommendation, Confidence_Level, and Alerts are now handled by evaluate_stock
+    # and its sub-functions (evaluate_swing, evaluate_long_term)
+    return master_breakdown, category_scores, final_score_value
 
 # --- UTILITY FUNCTIONS ---
 def analyze_sentiment(text: str) -> float:
@@ -749,24 +918,43 @@ def analyze_sentiment(text: str) -> float:
         return 0.0 # Return neutral sentiment for non-string or empty input
     return TextBlob(text).sentiment.polarity
 
-def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[str]]:
+def get_source_weight(source_name: str) -> float:
+    """Returns the weight for a given news source, defaulting to a lower weight if unknown."""
+    # Normalize source name for better matching (e.g., remove "The", "Inc.", convert to lower)
+    normalized_name = source_name.lower().replace("the ", "").replace("inc.", "").strip()
+    
+    # Simple mapping for common variations
+    if "bloomberg" in normalized_name: return SOURCE_WEIGHTS["Bloomberg"]
+    if "reuters" in normalized_name: return SOURCE_WEIGHTS["Reuters"]
+    if "cnbc" in normalized_name: return SOURCE_WEIGHTS["CNBC"]
+    if "wall street journal" in normalized_name: return SOURCE_WEIGHTS["The Wall Street Journal"]
+    if "associated press" in normalized_name: return SOURCE_WEIGHTS["Associated Press"]
+    if "yahoo finance" in normalized_name: return SOURCE_WEIGHTS["Yahoo Finance"]
+    if "marketwatch" in normalized_name: return SOURCE_WEIGHTS["MarketWatch"]
+    if "seeking alpha" in normalized_name: return SOURCE_WEIGHTS["Seeking Alpha"]
+    if "reddit" in normalized_name: return SOURCE_WEIGHTS["Reddit"]
+
+    # Fallback to general weights if specific match not found
+    if "newsapi" in normalized_name: return SOURCE_WEIGHTS["NewsAPI"]
+    if "google news" in normalized_name: return SOURCE_WEIGHTS["Google News"] # For GNews/RSS
+    return SOURCE_WEIGHTS.get(source_name, SOURCE_WEIGHTS["Unknown Blog"])
+
+def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float]], list[str]]:
     """
     Fetches recent news articles for a given ticker symbol from NewsAPI
-    and calculates the average sentiment.
-
-    Returns:
-        tuple: (Average sentiment: float | None, List of news titles: list)
+    filters them, and returns a list of (sentiment, weight) tuples and titles.
     """
     if not api_key:
         print("NewsAPI key not provided. Skipping NewsAPI fetch.")
-        return None, []
+        return [], []
     
     if not NewsApiClient: # Check if the library was successfully imported
         # A warning is already printed at import time.
-        return None, []
+        return [], []
 
     newsapi_client = NewsApiClient(api_key=api_key)
-    all_articles = []
+    weighted_sentiments = []
+    news_titles = []
     try:
         # Fetch news from the last 7 days (free tier usually limits to 30 days history)
         from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
@@ -776,20 +964,28 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None) -
                                                           language='en',
                                                           sort_by='relevancy',
                                                           from_param=from_date,
-                                                          to=to_date,
-                                                          page_size=20) # Max 20 articles per request for free tier
+                                                          to=to_date, 
+                                                          page_size=20)
 
         if articles_response and articles_response['articles']:
-            all_articles = articles_response['articles']
-            sentiments = [analyze_sentiment(article.get('title', '') + " " + (article.get('description', '') or ""))
-                          for article in all_articles if article.get('title') or article.get('description')]
-            if sentiments:
-                avg_sentiment = np.mean(sentiments)
-                news_titles = [article.get('title', 'No Title') for article in all_articles]
-                print(f"Fetched {len(news_titles)} articles from NewsAPI for {ticker_symbol}.")
-                return avg_sentiment, news_titles
-        print(f"No recent news found for {ticker_symbol} from NewsAPI.")
-        return None, []
+            for article in articles_response['articles']:
+                title = article.get('title', '')
+                description = article.get('description', '') or ""
+                source_name = article.get('source', {}).get('name', 'NewsAPI') # Default to NewsAPI if source name missing
+                
+                article_text = title + " " + description
+                
+                if is_stock_mentioned(article_text, ticker_symbol, company_name):
+                    sentiment = analyze_sentiment(article_text)
+                    weight = get_source_weight(source_name)
+                    weighted_sentiments.append((sentiment, weight))
+                    news_titles.append(title)
+            
+            if weighted_sentiments:
+                print(f"Fetched {len(news_titles)} relevant articles from NewsAPI for {ticker_symbol}.")
+                return weighted_sentiments, news_titles
+        print(f"No relevant news found for {ticker_symbol} from NewsAPI.")
+        return [], []
     except NewsAPIException as e: # type: ignore [misc] # misc because NewsAPIException could be the mock
         error_details = str(e) # Standard way to get exception message.
         # Check for common error substrings if specific codes/methods aren't available
@@ -807,51 +1003,79 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None) -
         else:
             code_info = f"(Code: {e.get_code()})" if ('get_code' in dir(e) and callable(e.get_code)) else ""
             print(f"Error fetching news from NewsAPI for {ticker_symbol} {code_info}: {error_details}")
-        return None, []
+        return [], []
     except Exception as e:
         print(f"An unexpected error occurred while fetching NewsAPI data for {ticker_symbol}: {e}")
-        return None, []
+        return [], []
 
-def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str) -> tuple[float | None, list[str]]:
+def is_stock_mentioned(news_article_text: str, ticker: str, company_name: str | None) -> bool:
+    """
+    Checks if the news article text explicitly mentions the stock ticker or company name.
+    """
+    if not news_article_text:
+        return False
+    
+    keywords = [ticker.upper()]
+    if company_name:
+        # Add full name and first word of the company name (e.g., "Alphabet" from "Alphabet Inc.")
+        keywords.extend([company_name, company_name.split(' ')[0]])
+        # Add common variations for well-known companies
+        if "Alphabet" in company_name:
+            keywords.append("Google")
+            keywords.append("$GOOG")
+        elif "Apple" in company_name:
+            keywords.append("$AAPL")
+        elif "Reliance" in company_name: # For RELIANCE.NS
+            keywords.append("Reliance Industries")
+            keywords.append("RIL")
+
+    # Create a regex pattern for whole word matching to avoid false positives (e.g., "APPL" in "application")
+    # Escape special characters in ticker for regex
+    ticker_escaped = re.escape(ticker)
+    patterns = [r'\b' + re.escape(k) + r'\b' for k in keywords if k] # Whole word match
+    patterns.append(r'\$' + ticker_escaped) # Match $TICKER
+
+    combined_pattern = re.compile('|'.join(patterns), re.IGNORECASE)
+    
+    return bool(combined_pattern.search(news_article_text))
+
+def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str, company_name: str | None) -> tuple[list[tuple[float, float]], list[str]]:
     """
     Fetches news from an RSS feed, filters by ticker symbol,
-    and calculates sentiment. Requires 'feedparser'.
+    and returns a list of (sentiment, weight) tuples and titles.
     """
     if feedparser is None:
-        # print("Feedparser not available. Cannot fetch RSS news.") # Silenced
-        return None, []
+        return [], []
 
-    relevant_articles = []
+    weighted_sentiments = []
+    news_titles = []
     try:
         feed = feedparser.parse(rss_url)
         if not feed.entries:
-            # print(f"No entries found in RSS feed: {rss_url}") # Silenced
-            return None, []
+            return [], []
 
         for entry in feed.entries:
             title = entry.get('title', '')
             summary = entry.get('summary', '') # Use .get() for safety
-            content = title + " " + summary
+            source_name = entry.get('source', {}).get('title', feed.get('feed', {}).get('title', 'Google News')) # Fallback to feed title
+            article_text = title + " " + summary
 
-            # Simple check: see if ticker symbol is in title or summary (case-insensitive)
-            if ticker_symbol.lower() in content.lower():
-                relevant_articles.append(entry)
+            if is_stock_mentioned(article_text, ticker_symbol, company_name):
+                sentiment = analyze_sentiment(article_text)
+                weight = get_source_weight(source_name)
+                weighted_sentiments.append((sentiment, weight))
+                news_titles.append(title)
 
-        if relevant_articles:
-            sentiments = [analyze_sentiment(entry.get('title', '') + " " + (entry.get('summary', '') or ""))
-                          for entry in relevant_articles]
-            if sentiments:
-                avg_sentiment = np.mean(sentiments)
-                news_titles = [entry.get('title', 'No Title') for entry in relevant_articles]
-                # print(f"Fetched {len(news_titles)} relevant articles from RSS for {ticker_symbol}.") # Silenced
-                return avg_sentiment, news_titles
-        # print(f"No relevant news found for {ticker_symbol} in RSS feed.") # Silenced
-        return None, []
+        if weighted_sentiments:
+            print(f"Fetched {len(news_titles)} relevant articles from RSS for {ticker_symbol}.")
+            return weighted_sentiments, news_titles
+        print(f"No relevant news found for {ticker_symbol} in RSS feed.")
+        return [], []
     except Exception as e:
-        # print(f"Error fetching RSS news from {rss_url}: {e}") # Silenced
-        return None, []
+        print(f"Error fetching RSS news from {rss_url}: {e}")
+        return [], []
 
-def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> tuple[float | None, list[str]]: # type: ignore
+def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float]], list[str]]: # type: ignore
     """
     Fetches news for a given ticker symbol from GNews and calculates sentiment.
         ticker_symbol (str): The stock ticker symbol (often for .NS market).
@@ -859,38 +1083,44 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None) -> 
     # The gnews library (v0.4.1) doesn't strictly require an API key for basic usage,
     # but we keep the key parameter for consistency or future library versions.
     Returns:
-        tuple: (Average sentiment: float | None, List of news titles: list)
+        tuple: (Average sentiment: float | None, List of (sentiment, weight) tuples: list, List of news titles: list)
     """
     if not gnews_client:
         print("GNews client not initialized. Cannot fetch news from GNews.")
-        return None, []
+        return [], []
     
     query = f"{ticker_symbol} stock news"
+    weighted_sentiments = []
+    news_titles = []
     try:
         # Assuming gnews_client.get_news(query) returns a list of article-like objects
         # Each object is expected to have 'title' and 'description' attributes or similar.
         # Adjust period and max_results as needed and if supported by the library.
         # Some gnews libraries might require setting period, country, etc. during client initialization
         # or on the get_news method.
-        # gnews_client.period = '7d' # Example: if the library supports setting period
-        # gnews_client.max_results = 10 # Example: if the library supports setting max results
         news_items = gnews_client.get_news(query)
 
         if news_items:
-            sentiments = [analyze_sentiment(item.get('title', '') + " " + (item.get('description', '') or item.get('text', '')))
-                          for item in news_items if item.get('title') or item.get('description') or item.get('text')]
-            if sentiments:
-                avg_sentiment = np.mean(sentiments)
-                news_titles = [item.get('title', 'No Title') for item in news_items]
-                print(f"Fetched {len(news_titles)} articles from GNews for {ticker_symbol}.")
-                return avg_sentiment, news_titles
-        print(f"No recent news found for {ticker_symbol} from GNews.")
-        return None, []
+            for item in news_items:
+                title = item.get('title', '')
+                description = item.get('description', '') or item.get('text', '') or ""
+                source_name = item.get('publisher', {}).get('title', 'Google News') # Default to Google News
+                article_text = title + " " + description
+                if is_stock_mentioned(article_text, ticker_symbol, company_name):
+                    sentiment = analyze_sentiment(article_text)
+                    weight = get_source_weight(source_name)
+                    weighted_sentiments.append((sentiment, weight))
+                    news_titles.append(title)
+            if weighted_sentiments:
+                print(f"Fetched {len(news_titles)} relevant articles from GNews for {ticker_symbol}.")
+                return weighted_sentiments, news_titles
+        print(f"No relevant news found for {ticker_symbol} from GNews.")
+        return [], []
     except Exception as e:
         print(f"Error fetching or processing GNews for {ticker_symbol}: {e}")
-        return None, []
+        return [], []
 
-def get_stock_data(ticker_symbol: str, period: str = "2y") -> tuple[pd.DataFrame | None, float | None, dict | None, str | None]:
+def get_stock_data(ticker_symbol: str, period: str = "max") -> tuple[pd.DataFrame | None, float | None, dict | None, str | None]:
     """
     Fetches historical stock data and basic company fundamentals using yfinance.
 
@@ -958,107 +1188,108 @@ if __name__ == "__main__":
         else:
             print("No ticker symbol entered. Please try again.")
 
-    # TICKER = args.ticker.strip().upper() # Convert to uppercase for consistency # Old argparse way
-   
-
     print(f"Starting comprehensive stock analysis script for {TICKER}...")
 
     # 1. Get Stock Data
-    historical_data, current_price, company_fundamentals, error = get_stock_data(TICKER)
+    historical_data, current_price, company_fundamentals, error = get_stock_data(TICKER, period="max") # Use "max" for ATH
 
     if error:
         print(f"\nError: {error}")
     elif historical_data is None or historical_data.empty:
         print(f"\nCould not retrieve sufficient data for {TICKER}. Exiting.")
     else:
+        # Get company long name for news filtering
+        company_long_name = company_fundamentals.get('longName')
+
         print(f"\n--- Data for {TICKER} ---")
         print(f"Current Price: ${current_price:.2f}")
 
         # 2. Calculate Technical Indicators
         technical_indicators = calculate_technical_indicators(historical_data)
         print("\n--- Technical Indicators ---")
-        if technical_indicators:
-            for k, v in technical_indicators.items():
-                if v is not None:
+        # Display only relevant indicators for brevity in console output
+        display_indicators = ['SMA_5', 'SMA_10', 'SMA_20', 'SMA_50', 'SMA_200', 'RSI', 'MACD', 'MACD_Signal', 'Volume_SMA_5', 'MACD_Hist']
+        for k in display_indicators:
+            v = technical_indicators.get(k)
+            if v is not None:
+                if isinstance(v, (int, float)):
                     print(f"{k}: {v:.2f}")
                 else:
-                    print(f"{k}: Not enough data")
-        else:
-            print("Technical indicators skipped (pandas-ta not available or insufficient data).")
+                    print(f"{k}: {v}")
+            else:
+                print(f"{k}: N/A")
+        
+        # Add ATH to fundamentals for consistency with app
+        if 'ath_from_period' not in company_fundamentals:
+            company_fundamentals['ath_from_period'] = historical_data['High'].max()
+            company_fundamentals['period_used_for_ath'] = "max"
 
 
         # 3. Fetch News Sentiment (from NewsAPI and RSS)
         # Retrieve API keys from environment for direct script execution
         env_news_api_key = os.environ.get("NEWS_API_KEY")
         env_gnews_api_key = os.environ.get("GNEWS_API_KEY")
-        newsapi_sentiment, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key) # Pass key
 
-        # Dynamically create ticker-specific RSS URL
+        # Each fetch function now returns a list of (sentiment, weight) tuples and titles
+        newsapi_weighted_sentiments, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key, company_long_name)
         ticker_specific_rss_url = BASE_GOOGLE_NEWS_RSS_URL.format(ticker=TICKER)
-        rss_sentiment, rss_titles = fetch_news_sentiment_from_rss(ticker_specific_rss_url, TICKER)
+        rss_weighted_sentiments, rss_titles = fetch_news_sentiment_from_rss(ticker_specific_rss_url, TICKER, company_long_name)
+        gnews_weighted_sentiments, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key, company_long_name)
 
-        # Combine sentiments and titles
-        combined_sentiments = []
-        # Fetch GNews sentiment (Pass key, though library might not use it)
-        gnews_sentiment, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key)
+        all_weighted_sentiments = []
+        all_news_titles = []
 
+        all_weighted_sentiments.extend(newsapi_weighted_sentiments)
+        all_news_titles.extend(newsapi_titles)
+        all_weighted_sentiments.extend(rss_weighted_sentiments)
+        all_news_titles.extend(rss_titles)
+        all_weighted_sentiments.extend(gnews_weighted_sentiments)
+        all_news_titles.extend(gnews_titles)
 
-        combined_news_titles = []
-
-        if newsapi_sentiment is not None:
-            combined_sentiments.append(newsapi_sentiment)
-            combined_news_titles.extend(newsapi_titles)
-        if rss_sentiment is not None:
-            combined_sentiments.append(rss_sentiment)
-            combined_news_titles.extend(rss_titles)
-        if gnews_sentiment is not None: # Add GNews results
-            combined_sentiments.append(gnews_sentiment)
-            combined_news_titles.extend(gnews_titles) # Correctly add GNews titles
         overall_news_sentiment = None
-        if combined_sentiments:
-            overall_news_sentiment = np.mean(combined_sentiments)
+        if all_weighted_sentiments:
+            # Calculate weighted average
+            total_sentiment_score = sum(s * w for s, w in all_weighted_sentiments)
+            total_weight = sum(w for s, w in all_weighted_sentiments)
+            if total_weight > 0:
+                overall_news_sentiment = total_sentiment_score / total_weight
+            else:
+                overall_news_sentiment = None # Avoid division by zero if all weights are zero
 
         print("\n--- News Sentiment ---")
         if overall_news_sentiment is not None:
             print(f"Overall News Sentiment: {overall_news_sentiment:.2f}")
             print("Recent News Titles (sample):")
             # Convert to set to get unique titles, then back to list for slicing
-            for i, title in enumerate(list(set(combined_news_titles))[:10]):
+            for i, title in enumerate(list(set(all_news_titles))[:10]):
                 print(f"  - {title}")
         else:
             print("Could not fetch news sentiment from any source.")
 
-        # 4. Basic Analysis (using overall news sentiment)
+        # 4. Basic Analysis (using overall news sentiment) - Kept for compatibility
         basic_recommendation, basic_confidence, basic_reason = analyze_stock(historical_data, overall_news_sentiment)
         print(f"\n--- Basic Analysis for {TICKER} ---")
         print(f"Recommendation: {basic_recommendation} (Confidence: {basic_confidence}%)")
         print(f"Reason: {basic_reason}")
 
-        # 5. Enhanced Analysis
-        enhanced_recommendation, confidence_level, alerts, breakdown, category_scores, final_score_value = enhanced_analysis(
+        # 5. Enhanced Analysis (Category Scores & Breakdown)
+        master_breakdown, category_scores, final_score_value = enhanced_analysis(
             historical_data,
             technical_indicators,
             company_fundamentals,
             overall_news_sentiment
         )
 
-        print(f"\n--- Enhanced Analysis for {TICKER} ---")
+        print(f"\n--- Enhanced Analysis Breakdown for {TICKER} ---")
         print("Category Scores:")
         for category, score in category_scores.items():
             print(f"  - {category}: {score:.2f}/100")
 
-        print(f"Recommendation: {enhanced_recommendation} (Final Score: {final_score_value:.2f}, Confidence: {confidence_level}%)")
         print("Reason Breakdown:")
         for category, details in breakdown.items():
             print(f"  - {category}:")
             for reason, value in details.items():
                 print(f"    - {reason}: {value}")
-        if alerts:
-            print("Alerts:")
-            for alert in alerts:
-                print(f"  - {alert}")
-        else:
-            print("No specific alerts.")
         
         # Dual Recommendation System
         print(f"\n--- Dual Recommendation System for {TICKER} ---")
@@ -1068,9 +1299,19 @@ if __name__ == "__main__":
             historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period
         )
         print("\nSwing Trader Recommendation:")
-        print(dual_analysis_results["swing_trader"])
+        print(f"  Recommendation: {dual_analysis_results['swing_trader']['recommendation']}")
+        print(f"  Confidence: {dual_analysis_results['swing_trader']['confidence']}%")
+        print("  Alerts:")
+        for alert in dual_analysis_results['swing_trader']['alerts']:
+            print(f"    - {alert}")
         print("\nLong-Term Investor Recommendation:")
-        print(dual_analysis_results["long_term_investor"])
+        print(f"  Recommendation: {dual_analysis_results['long_term_investor']['recommendation']}")
+        print(f"  Confidence: {dual_analysis_results['long_term_investor']['confidence']}%")
+        print("  Alerts:")
+        for alert in dual_analysis_results['long_term_investor']['alerts']:
+            print(f"    - {alert}")
 
 
     print("\nScript finished.")
+
+

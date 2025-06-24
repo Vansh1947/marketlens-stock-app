@@ -10,7 +10,7 @@ st.set_page_config(
 # Import all your functions from stock.py
 # Assuming stock.py is in the same directory or accessible via PYTHONPATH
 from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi, evaluate_stock,
-    fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis,
+    fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis, is_stock_mentioned, get_source_weight
 )
 import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
@@ -161,7 +161,7 @@ with col2:
     analysis_period = st.selectbox(
         "Select Analysis Period (for ATH):",
         ("6 Months", "1 Year", "2 Years", "Max"),
-        index=2  # Default to '2 Years'
+        index=3  # Default to 'Max' for ATH
     )
 
 # Map user-friendly names to yfinance period strings
@@ -190,6 +190,9 @@ if st.button("Analyze Stock"):
         elif historical_data is None or historical_data.empty:
             st.warning(f"Could not retrieve sufficient data for {ticker_symbol_processed}.")
         else:
+            # Get company long name for news filtering
+            company_long_name = company_fundamentals.get('longName')
+
             st.markdown(f"<h3 style='color: #4682B4;'>📊 Data for {ticker_symbol_processed}</h3>", unsafe_allow_html=True)
             st.metric(label="Current Price", value=f"${current_price:.2f}" if current_price is not None else "N/A")
 
@@ -229,6 +232,9 @@ if st.button("Analyze Stock"):
                 sma_5 = technical_indicators.get('SMA_5')
                 st.write(f"**SMA_5:** {f'{sma_5:.2f}' if sma_5 is not None else 'N/A'}")
 
+                sma_10 = technical_indicators.get('SMA_10')
+                st.write(f"**SMA_10:** {f'{sma_10:.2f}' if sma_10 is not None else 'N/A'}")
+
                 sma_20 = technical_indicators.get('SMA_20')
                 st.write(f"**SMA_20:** {f'{sma_20:.2f}' if sma_20 is not None else 'N/A'}")
 
@@ -240,8 +246,9 @@ if st.button("Analyze Stock"):
                 
                 macd_val = technical_indicators.get('MACD')
                 macd_signal_val = technical_indicators.get('MACD_Signal')
+                macd_hist_val = technical_indicators.get('MACD_Hist')
                 if macd_val is not None and macd_signal_val is not None:
-                    st.write(f"**MACD:** {macd_val:.2f} (Signal: {macd_signal_val:.2f})")
+                    st.write(f"**MACD:** {macd_val:.2f} (Signal: {macd_signal_val:.2f}, Hist: {macd_hist_val:.2f})")
                 else:
                     st.write("**MACD:** N/A")
                 
@@ -259,46 +266,41 @@ if st.button("Analyze Stock"):
                 st.write(f"**Debt to Equity:** {f'{debt_to_equity:.2f}' if isinstance(debt_to_equity, (int, float)) else 'N/A'}")
 
             # 3. Fetch News Sentiment (from NewsAPI and GNews)
-            # Initialize newsapi_client for Streamlit app context if not already done in stock.py
-            newsapi_sentiment, newsapi_titles = None, [] # Ensure they are defined
+            all_weighted_sentiments = []
+            combined_news_titles = []
+
             # Fetch NewsAPI sentiment if key is available
             if APP_NEWS_API_KEY: # Check if the NewsAPI key is configured
-                newsapi_sentiment, newsapi_titles = fetch_news_sentiment_from_newsapi(ticker_symbol_processed, APP_NEWS_API_KEY)
-            # else: # Commented out as the sidebar already indicates missing key.
-                # Sidebar already indicates missing key. No prominent warning in main UI.
+                newsapi_weighted_sentiments, newsapi_titles = fetch_news_sentiment_from_newsapi(ticker_symbol_processed, APP_NEWS_API_KEY, company_long_name)
+                all_weighted_sentiments.extend(newsapi_weighted_sentiments)
+                combined_news_titles.extend(newsapi_titles)
 
-            gnews_sentiment, gnews_titles = None, [] # Ensure defined
             # Attempt GNews if key is present (useful for broader coverage or specific regions like India)
             # Check if the GNews API key is configured
             if APP_GNEWS_API_KEY: 
                 st.write(f"Attempting to fetch news from GNews for {ticker_symbol_processed}...") # User feedback
-                gnews_sentiment, gnews_titles = fetch_news_sentiment_from_gnews(ticker_symbol_processed, APP_GNEWS_API_KEY) # Pass the API key
-            # else: # Commented out as the sidebar already indicates missing key.
-                # Sidebar already indicates missing key.
-
-            combined_sentiments = []
-            combined_news_titles = []
-
-            if newsapi_sentiment is not None:
-                combined_sentiments.append(newsapi_sentiment)
-                combined_news_titles.extend(newsapi_titles)
-            if gnews_sentiment is not None:
-                combined_sentiments.append(gnews_sentiment)
+                gnews_weighted_sentiments, gnews_titles = fetch_news_sentiment_from_gnews(ticker_symbol_processed, APP_GNEWS_API_KEY, company_long_name) # Pass the API key
+                all_weighted_sentiments.extend(gnews_weighted_sentiments)
                 combined_news_titles.extend(gnews_titles)
+
+            overall_news_sentiment = None
+            if all_weighted_sentiments:
+                total_sentiment_score = sum(s * w for s, w in all_weighted_sentiments)
+                total_weight = sum(w for s, w in all_weighted_sentiments)
+                if total_weight > 0:
+                    overall_news_sentiment = total_sentiment_score / total_weight
+                else:
+                    overall_news_sentiment = None # Avoid division by zero if all weights are zero
 
             # De-duplicate news titles
             if combined_news_titles:
                 unique_titles = list(dict.fromkeys(combined_news_titles)) # More efficient deduplication
                 combined_news_titles = unique_titles
 
-            overall_news_sentiment = None
-            if combined_sentiments:
-                overall_news_sentiment = np.mean(combined_sentiments)
-
             st.markdown("---") # Visual separator
             with st.expander("📰 News Sentiment Details", expanded=False): # Added emoji
                 if overall_news_sentiment is not None:
-                    st.write(f"**Overall News Sentiment:** {overall_news_sentiment:.2f}")
+                    st.write(f"**Overall Weighted News Sentiment:** {overall_news_sentiment:.2f}")
                     st.write("Recent News Titles (sample):")
                     # Display more unique titles (up to 10)
                     for i, title in enumerate(combined_news_titles[:10]):
@@ -306,11 +308,11 @@ if st.button("Analyze Stock"):
                 # If after all sources, there's still no overall sentiment
                 if overall_news_sentiment is None:
                     st.write("No news sentiment could be determined from available sources.")
-                st.caption("Sentiment is based on news titles and descriptions.")
+                st.caption("Sentiment is based on news titles and descriptions, filtered for relevance and weighted by source credibility.")
 
             # DeepSeek News Summary section removed
             st.markdown("---") # Visual separator
-            # 4. Basic Analysis
+            # 4. Basic Analysis (Kept for compatibility)
             with st.expander("🔬 Basic Analysis (Technical + News Sentiment)", expanded=False): # Added emoji
                 basic_recommendation, basic_confidence, basic_reason = analyze_stock(historical_data, overall_news_sentiment)
                 st.write(f"**Recommendation:** {basic_recommendation} (Confidence: {basic_confidence}%)")
@@ -329,13 +331,26 @@ if st.button("Analyze Stock"):
             )
             
             st.subheader("📈 Swing Trader Recommendation")
-            st.json(dual_analysis_results["swing_trader"])
-            st.subheader("🏛️ Long-Term Investor Recommendation")
-            st.json(dual_analysis_results["long_term_investor"])
+            st.write(f"**Recommendation:** {dual_analysis_results['swing_trader']['recommendation']}")
+            st.write(f"**Confidence:** {dual_analysis_results['swing_trader']['confidence']}%")
+            if dual_analysis_results["swing_trader"].get("alerts"):
+                st.info("Swing Trader Alerts:")
+                for alert in dual_analysis_results["swing_trader"]["alerts"]:
+                    st.write(f"- {alert}")
 
-            # 5. Enhanced Analysis (Simplified)
+            st.subheader("🏛️ Long-Term Investor Recommendation")
+            st.write(f"**Recommendation:** {dual_analysis_results['long_term_investor']['recommendation']}")
+            st.write(f"**Confidence:** {dual_analysis_results['long_term_investor']['confidence']}%")
+            if dual_analysis_results["long_term_investor"].get("alerts"):
+                st.info("Long-Term Investor Alerts:")
+                for alert in dual_analysis_results["long_term_investor"]["alerts"]:
+                    st.write(f"- {alert}")
+
+
+            # 5. Enhanced Analysis (Category Scores & Breakdown)
             st.markdown("---")  # Visual separator
-            enhanced_recommendation, confidence_level, alerts, breakdown, category_scores, final_score_value = enhanced_analysis(
+            # The 'enhanced_analysis' function now returns only breakdown and category scores
+            breakdown, category_scores, final_score_value = enhanced_analysis(
                 historical_data,
                 technical_indicators,
                 company_fundamentals,
@@ -353,20 +368,18 @@ if st.button("Analyze Stock"):
                         else:
                             display_value = details_text
                         st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{reason}:** `{display_value}`")
-            if alerts:
-                st.warning("Important Alerts:")
-                for alert in alerts:
-                    st.write(f"  - {alert}")
+            
+            # Alerts from the dual recommendation system are already displayed above.
+            # No need to display a separate 'alerts' list here from enhanced_analysis,
+            # as it no longer returns one.
 
             st.markdown("---") # Visual separator
 
             # --- KEY ANALYSIS SUMMARY ---
             with st.container(border=True):
                 st.subheader(f"KEY ANALYSIS SUMMARY FOR {ticker_symbol_processed}")
-                st.metric(label="Final Recommendation", value=enhanced_recommendation)
-                st.metric(label="Confidence Level", value=f"{confidence_level}%")
-                # Simplified score calculation details
-                st.markdown(f"**Final Score Value:** {final_score_value:.2f}")
+                # Removed "Final Recommendation" and "Confidence Level" from here
+                st.markdown(f"**Overall Analysis Score:** {final_score_value:.2f}") # Renamed for clarity
 
                 # Construct a concise reason string for the summary
                 summary_reasons = []
@@ -411,12 +424,9 @@ if st.button("Analyze Stock"):
                     else: summary_reasons.append("News Sentiment: Neutral")
 
                 # Limit to top 5 reasons, prioritizing the order they are added
-                final_summary_reason_str = "Recommendation based on analysis: " + "; ".join(summary_reasons[:5])
+                final_summary_reason_str = "Analysis based on: " + "; ".join(summary_reasons[:5])
                 if len(summary_reasons) > 5:
                     final_summary_reason_str += "; ..." # Indicate more reasons if truncated
-                st.markdown(f"**Primary Reasons:** {final_summary_reason_str}")
+                st.markdown(f"**Primary Factors:** {final_summary_reason_str}")
                 
-                if alerts: # Display critical alerts from enhanced analysis again for emphasis
-                    st.warning("Important Alerts to Consider (from Enhanced Analysis):")
-                    for alert in alerts:
-                        st.write(f" - {alert}")
+                # Alerts are displayed in the dual recommendation section above.
