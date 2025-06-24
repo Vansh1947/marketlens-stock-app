@@ -7,10 +7,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Import all your functions from stock.py
+# Import all your functions from stock.py, including new ones for news refinement, basic_analysis, and updated parameters for generate_dynamic_alerts
 # Assuming stock.py is in the same directory or accessible via PYTHONPATH
-from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi, evaluate_stock,
-    fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis, is_stock_mentioned, get_source_weight
+from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
+    fetch_news_sentiment_from_gnews, analyze_sentiment, basic_analysis, evaluate_stock,
+    enhanced_analysis, is_stock_mentioned, get_source_weight, fetch_news_sentiment_from_rss # Added fetch_news_sentiment_from_rss
 )
 import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
@@ -24,6 +25,26 @@ except ImportError:
     ta = None
     # stock.py already warns about pandas-ta missing for core calculations.
     # Plotting functions will handle pandas-ta (aliased as ta) being None.
+
+# --- Caching Decorators for Streamlit ---
+# Cache stock data for 1 hour
+@st.cache_data(ttl=3600)
+def cached_get_stock_data(ticker_symbol, period):
+    return get_stock_data(ticker_symbol, period)
+
+# Cache technical indicators for 1 hour
+@st.cache_data(ttl=3600)
+def cached_calculate_technical_indicators(historical_data):
+    return calculate_technical_indicators(historical_data)
+
+# Cache news sentiment for 4 hours (adjust TTL as needed for freshness vs API limits)
+@st.cache_data(ttl=14400)
+def cached_fetch_news_sentiment_from_newsapi(ticker_symbol, api_key, company_name):
+    return fetch_news_sentiment_from_newsapi(ticker_symbol, api_key, company_name)
+
+@st.cache_data(ttl=14400)
+def cached_fetch_news_sentiment_from_gnews(ticker_symbol, api_key, company_name):
+    return fetch_news_sentiment_from_gnews(ticker_symbol, api_key, company_name)
 
 # Re-read environment variables inside the app or pass them
 # Use st.secrets first, fallback to environment variables
@@ -180,10 +201,11 @@ if st.button("Analyze Stock"):
     else:
         # Clean and uppercase the ticker symbol for consistent processing
         ticker_symbol_processed = ticker_input_raw.strip().upper()
-        st.info(f"Analyzing {ticker_symbol_processed} for period: {analysis_period}...")
-
-        # 1. Get Stock Data
-        historical_data, current_price, company_fundamentals, error = get_stock_data(ticker_symbol_processed, period=selected_period_yf)
+        
+        with st.spinner(f"Analyzing {ticker_symbol_processed} for period: {analysis_period}..."):
+            # 1. Get Stock Data
+            # Use cached version
+            historical_data, current_price, company_fundamentals, error = cached_get_stock_data(ticker_symbol_processed, period=selected_period_yf)
 
         if error:
             st.error(f"Error fetching data for {ticker_symbol_processed}: {error}")
@@ -225,7 +247,8 @@ if st.button("Analyze Stock"):
 
             # 2. Calculate Technical Indicators
             st.markdown("---") # Visual separator
-            with st.expander("⚙️ Key Indicators (Last Values)", expanded=False): # Changed title
+            with st.expander("⚙️ Key Indicators (Last Values)", expanded=False):
+                # Use cached version
                 technical_indicators = calculate_technical_indicators(historical_data)
                 
                 # Safely display technical indicators
@@ -233,7 +256,6 @@ if st.button("Analyze Stock"):
                 st.write(f"**SMA_5:** {f'{sma_5:.2f}' if sma_5 is not None else 'N/A'}")
 
                 sma_10 = technical_indicators.get('SMA_10')
-                st.write(f"**SMA_10:** {f'{sma_10:.2f}' if sma_10 is not None else 'N/A'}")
 
                 sma_20 = technical_indicators.get('SMA_20')
                 st.write(f"**SMA_20:** {f'{sma_20:.2f}' if sma_20 is not None else 'N/A'}")
@@ -267,13 +289,13 @@ if st.button("Analyze Stock"):
 
             # 3. Fetch News Sentiment (from NewsAPI and GNews)
             all_weighted_sentiments = []
-            combined_news_titles = []
+            combined_news_titles = [] # This will hold unique titles from all sources
 
             # Fetch NewsAPI sentiment if key is available
             if APP_NEWS_API_KEY: # Check if the NewsAPI key is configured
-                newsapi_weighted_sentiments, newsapi_titles = fetch_news_sentiment_from_newsapi(ticker_symbol_processed, APP_NEWS_API_KEY, company_long_name)
+                newsapi_weighted_sentiments, newsapi_titles = cached_fetch_news_sentiment_from_newsapi(ticker_symbol_processed, APP_NEWS_API_KEY, company_long_name)
                 all_weighted_sentiments.extend(newsapi_weighted_sentiments)
-                combined_news_titles.extend(newsapi_titles)
+                combined_news_titles.extend(newsapi_titles) # Add titles from NewsAPI
 
             # Attempt GNews if key is present (useful for broader coverage or specific regions like India)
             # Check if the GNews API key is configured
@@ -281,7 +303,7 @@ if st.button("Analyze Stock"):
                 st.write(f"Attempting to fetch news from GNews for {ticker_symbol_processed}...") # User feedback
                 gnews_weighted_sentiments, gnews_titles = fetch_news_sentiment_from_gnews(ticker_symbol_processed, APP_GNEWS_API_KEY, company_long_name) # Pass the API key
                 all_weighted_sentiments.extend(gnews_weighted_sentiments)
-                combined_news_titles.extend(gnews_titles)
+                combined_news_titles.extend(gnews_titles) # Add titles from GNews
 
             overall_news_sentiment = None
             if all_weighted_sentiments:
@@ -299,7 +321,7 @@ if st.button("Analyze Stock"):
 
             st.markdown("---") # Visual separator
             with st.expander("📰 News Sentiment Details", expanded=False): # Added emoji
-                if overall_news_sentiment is not None:
+                if overall_news_sentiment is not None: # Only display if sentiment was calculated
                     st.write(f"**Overall Weighted News Sentiment:** {overall_news_sentiment:.2f}")
                     st.write("Recent News Titles (sample):")
                     # Display more unique titles (up to 10)
@@ -314,13 +336,13 @@ if st.button("Analyze Stock"):
             st.markdown("---") # Visual separator
             # 4. Basic Analysis (Kept for compatibility)
             with st.expander("🔬 Basic Analysis (Technical + News Sentiment)", expanded=False): # Added emoji
-                basic_recommendation, basic_confidence, basic_reason = analyze_stock(historical_data, overall_news_sentiment)
+                basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment)
                 st.write(f"**Recommendation:** {basic_recommendation} (Confidence: {basic_confidence}%)")
                 st.write(f"**Reason:** {basic_reason}")
-
-            # New: Dual Recommendation System
+            
+            # New: Swing Trader Recommendation System
             st.markdown("---") # Visual separator
-            st.markdown("<h3 style='color: #4682B4;'>🎯 Dual Recommendation System</h3>", unsafe_allow_html=True)
+            st.markdown("<h3 style='color: #4682B4;'>🎯 Swing Trader Recommendation System</h3>", unsafe_allow_html=True)
             
             # ATH is calculated in get_stock_data and passed via company_fundamentals for simplicity
             # It's stored as 'ath_from_period'
@@ -328,7 +350,7 @@ if st.button("Analyze Stock"):
             
             dual_analysis_results = evaluate_stock(
                 historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period
-            )
+            ) # This now returns only swing_trader results
             
             st.subheader("📈 Swing Trader Recommendation")
             st.write(f"**Recommendation:** {dual_analysis_results['swing_trader']['recommendation']}")
@@ -336,14 +358,6 @@ if st.button("Analyze Stock"):
             if dual_analysis_results["swing_trader"].get("alerts"):
                 st.info("Swing Trader Alerts:")
                 for alert in dual_analysis_results["swing_trader"]["alerts"]:
-                    st.write(f"- {alert}")
-
-            st.subheader("🏛️ Long-Term Investor Recommendation")
-            st.write(f"**Recommendation:** {dual_analysis_results['long_term_investor']['recommendation']}")
-            st.write(f"**Confidence:** {dual_analysis_results['long_term_investor']['confidence']}%")
-            if dual_analysis_results["long_term_investor"].get("alerts"):
-                st.info("Long-Term Investor Alerts:")
-                for alert in dual_analysis_results["long_term_investor"]["alerts"]:
                     st.write(f"- {alert}")
 
 
