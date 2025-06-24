@@ -488,6 +488,32 @@ def _calculate_fundamental_score(company_fundamentals: dict) -> tuple[float, dic
         breakdown["Debt to Equity"] = {"points": 0, "details": "N/A"}
     
     return max(0, min(100, score)), breakdown
+
+def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dict, list]:
+    """Calculates a normalized sentiment score (0-100) and provides a breakdown and alerts."""
+    score = 50.0
+    breakdown = {}
+    alerts = []
+    
+    if news_sentiment is not None: # Sentiment rule: <0 = Negative, 0-0.1 = Neutral, >0.1 = Positive
+        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
+            points = 20 # Positive impact
+            alerts.append(f"Notice: Positive news sentiment detected ({news_sentiment:.2f}).")
+            sentiment_label = "Positive"
+        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
+            points = -20 # Negative impact
+            alerts.append(f"Alert: Negative news sentiment detected ({news_sentiment:.2f}).")
+            sentiment_label = "Negative"
+        else: # 0.0 to 0.1 (inclusive of 0.0)
+            points = 0
+            sentiment_label = "Neutral"
+        score += points
+        breakdown["Overall News Sentiment"] = {"points": points, "details": f"{news_sentiment:.2f} ({sentiment_label})"}
+    else:
+        breakdown["Overall News Sentiment"] = {"points": 0, "details": "N/A"}
+    
+    return max(0, min(100, score)), breakdown, alerts
+
 # --- DUAL RECOMMENDATION SYSTEM ---
 def evaluate_swing(data: dict) -> dict:
     """
@@ -671,32 +697,6 @@ def evaluate_stock(
         "swing_trader": swing_result,
         "long_term_investor": long_term_result
     }
-
-
-def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dict, list]:
-    """Calculates a normalized sentiment score (0-100) and provides a breakdown and alerts."""
-    score = 50.0
-    breakdown = {}
-    alerts = []
-    
-    if news_sentiment is not None: # Sentiment rule: <0 = Negative, 0-0.1 = Neutral, >0.1 = Positive
-        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
-            points = 20 # Positive impact
-            alerts.append(f"Notice: Positive news sentiment detected ({news_sentiment:.2f}).")
-            sentiment_label = "Positive"
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
-            points = -20 # Negative impact
-            alerts.append(f"Alert: Negative news sentiment detected ({news_sentiment:.2f}).")
-            sentiment_label = "Negative"
-        else: # 0.0 to 0.1 (inclusive of 0.0)
-            points = 0
-            sentiment_label = "Neutral"
-        score += points
-        breakdown["Overall News Sentiment"] = {"points": points, "details": f"{news_sentiment:.2f} ({sentiment_label})"}
-    else:
-        breakdown["Overall News Sentiment"] = {"points": 0, "details": "N/A"}
-    
-    return max(0, min(100, score)), breakdown, alerts
 
 # --- ADVANCED ANALYSIS ---
 def enhanced_analysis(historical_data: pd.DataFrame, technical_indicators: dict, company_fundamentals: dict, news_sentiment: float | None) -> tuple:
@@ -929,7 +929,7 @@ def get_stock_data(ticker_symbol: str, period: str = "2y") -> tuple[pd.DataFrame
             return None, current_price_from_info, company_fundamentals, f"No historical data found for '{ticker_symbol}' for the period '{period}'. Some fundamental data might be available."
 
         # Ensure 'Close' column exists and has data before accessing iloc[-1]
-        if 'Close' in historical_data.columns and not historical_data['Close'].empty:
+        if 'Close' in historical_data.columns and not historical_data.empty:
             current_price_from_history = historical_data['Close'].iloc[-1]
             # Calculate All-Time High from the fetched historical data period
             # This is the high for the selected period, not the true all-time high unless period='max'
@@ -1059,7 +1059,8 @@ if __name__ == "__main__":
                 print(f"  - {alert}")
         else:
             print("No specific alerts.")
-                 # Dual Recommendation System
+        
+        # Dual Recommendation System
         print(f"\n--- Dual Recommendation System for {TICKER} ---")
         # ATH is now part of company_fundamentals
         all_time_high_for_period = company_fundamentals.get('ath_from_period')

@@ -9,7 +9,7 @@ st.set_page_config(
 
 # Import all your functions from stock.py
 # Assuming stock.py is in the same directory or accessible via PYTHONPATH
-from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
+from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi, evaluate_stock,
     fetch_news_sentiment_from_gnews, analyze_sentiment, analyze_stock, enhanced_analysis,
 )
 import numpy as np # Needed for np.mean if sentiments are combined
@@ -316,6 +316,22 @@ if st.button("Analyze Stock"):
                 st.write(f"**Recommendation:** {basic_recommendation} (Confidence: {basic_confidence}%)")
                 st.write(f"**Reason:** {basic_reason}")
 
+            # New: Dual Recommendation System
+            st.markdown("---") # Visual separator
+            st.markdown("<h3 style='color: #4682B4;'>🎯 Dual Recommendation System</h3>", unsafe_allow_html=True)
+            
+            # ATH is calculated in get_stock_data and passed via company_fundamentals for simplicity
+            # It's stored as 'ath_from_period'
+            all_time_high_for_period = company_fundamentals.get('ath_from_period')
+            
+            dual_analysis_results = evaluate_stock(
+                historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period
+            )
+            
+            st.subheader("📈 Swing Trader Recommendation")
+            st.json(dual_analysis_results["swing_trader"])
+            st.subheader("🏛️ Long-Term Investor Recommendation")
+            st.json(dual_analysis_results["long_term_investor"])
 
             # 5. Enhanced Analysis (Simplified)
             st.markdown("---")  # Visual separator
