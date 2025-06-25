@@ -12,7 +12,7 @@ st.set_page_config(
 # Note: The return type of news fetching functions changed to include matched themes.
 from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
     fetch_news_sentiment_from_gnews, analyze_sentiment, basic_analysis, evaluate_stock,
-    enhanced_analysis, is_stock_mentioned, get_source_weight, fetch_news_sentiment_from_rss # Added fetch_news_sentiment_from_rss
+    is_stock_mentioned, get_source_weight, fetch_news_sentiment_from_rss # Added fetch_news_sentiment_from_rss
 )
 import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
@@ -250,13 +250,14 @@ if st.button("Analyze Stock"):
             st.markdown("---") # Visual separator
             with st.expander("⚙️ Key Indicators (Last Values)", expanded=False):
                 # Use cached version
-                technical_indicators = calculate_technical_indicators(historical_data)
+                technical_indicators = cached_calculate_technical_indicators(historical_data)
                 
                 # Safely display technical indicators
                 sma_5 = technical_indicators.get('SMA_5')
                 st.write(f"**SMA_5:** {f'{sma_5:.2f}' if sma_5 is not None else 'N/A'}")
 
                 sma_10 = technical_indicators.get('SMA_10')
+                st.write(f"**SMA_10:** {f'{sma_10:.2f}' if sma_10 is not None else 'N/A'}") # Display SMA_10
 
                 sma_20 = technical_indicators.get('SMA_20')
                 st.write(f"**SMA_20:** {f'{sma_20:.2f}' if sma_20 is not None else 'N/A'}")
@@ -295,8 +296,8 @@ if st.button("Analyze Stock"):
 
             # Fetch NewsAPI sentiment if key is available
             if APP_NEWS_API_KEY: # Check if the NewsAPI key is configured
-                newsapi_weighted_sentiments, newsapi_titles = cached_fetch_news_sentiment_from_newsapi(ticker_symbol_processed, APP_NEWS_API_KEY, company_long_name)
-                all_weighted_sentiments.extend(newsapi_weighted_sentiments)
+                newsapi_results, newsapi_titles = cached_fetch_news_sentiment_from_newsapi(ticker_symbol_processed, APP_NEWS_API_KEY, company_long_name)
+                all_weighted_sentiments.extend(newsapi_results)
                 combined_news_titles.extend(newsapi_titles) # Add titles from NewsAPI
 
             # Attempt GNews if key is present (useful for broader coverage or specific regions like India)
@@ -338,11 +339,10 @@ if st.button("Analyze Stock"):
                     st.write("No news sentiment could be determined from available sources.")
                 st.caption("Sentiment is based on news titles and descriptions, filtered for relevance and weighted by source credibility.")
 
-            # DeepSeek News Summary section removed
             st.markdown("---") # Visual separator
             # 4. Basic Analysis (Kept for compatibility)
             with st.expander("🔬 Basic Analysis (Technical + News Sentiment)", expanded=False): # Added emoji
-                basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment)
+                basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment, combined_news_titles)
                 st.write(f"**Recommendation:** {basic_recommendation} (Confidence: {basic_confidence}%)")
                 st.write(f"**Reason:** {basic_reason}")
             
@@ -354,100 +354,14 @@ if st.button("Analyze Stock"):
             # It's stored as 'ath_from_period'
             all_time_high_for_period = company_fundamentals.get('ath_from_period')
             # Pass the collected news themes to evaluate_stock
-            dual_analysis_results = evaluate_stock(
-                historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period
-                , all_matched_news_themes # New argument
+            swing_analysis_results = evaluate_stock(
+                historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period, all_matched_news_themes, combined_news_titles # Pass all news titles
             ) # This now returns only swing_trader results
             
             st.subheader("📈 Swing Trader Recommendation")
-            st.write(f"**Recommendation:** {dual_analysis_results['swing_trader']['recommendation']}")
-            st.write(f"**Confidence:** {dual_analysis_results['swing_trader']['confidence']}%")
-            if dual_analysis_results["swing_trader"].get("alerts"):
+            st.write(f"**Recommendation:** {swing_analysis_results['swing_trader']['recommendation']}")
+            st.write(f"**Confidence:** {swing_analysis_results['swing_trader']['confidence']}%")
+            if swing_analysis_results["swing_trader"].get("alerts"):
                 st.info("Swing Trader Alerts:")
-                for alert in dual_analysis_results["swing_trader"]["alerts"]:
+                for alert in swing_analysis_results["swing_trader"]["alerts"]:
                     st.write(f"- {alert}")
-
-
-            # 5. Enhanced Analysis (Category Scores & Breakdown)
-            st.markdown("---")  # Visual separator
-            # The 'enhanced_analysis' function now returns only breakdown and category scores
-            breakdown, category_scores, final_score_value = enhanced_analysis(
-                historical_data,
-                technical_indicators,
-                company_fundamentals,
-                overall_news_sentiment
-            )
-            # Detailed Analysis Breakdown (collapsible)
-            with st.expander("Detailed Analysis Breakdown", expanded=False):
-                for category, details in breakdown.items():
-                    st.markdown(f"**{category}**")
-                    for reason, item_details in details.items():
-                        points = item_details.get('points', 0)
-                        details_text = item_details.get('details', 'N/A')
-                        if "points" in item_details:
-                            display_value = f"{points:+.0f} ({details_text})"
-                        else:
-                            display_value = details_text
-                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{reason}:** `{display_value}`")
-            
-            # Alerts from the dual recommendation system are already displayed above.
-            # No need to display a separate 'alerts' list here from enhanced_analysis,
-            # as it no longer returns one.
-
-            st.markdown("---") # Visual separator
-
-            # --- KEY ANALYSIS SUMMARY ---
-            with st.container(border=True):
-                st.subheader(f"KEY ANALYSIS SUMMARY FOR {ticker_symbol_processed}")
-                # Removed "Final Recommendation" and "Confidence Level" from here
-                st.markdown(f"**Overall Analysis Score:** {final_score_value:.2f}") # Renamed for clarity
-
-                # Construct a concise reason string for the summary
-                summary_reasons = []
-                
-                def get_summary_from_item(item_dict, default_text="Neutral"):
-                    points = item_dict.get('points', 0)
-                    details = item_dict.get('details', '')
-                    if points > 0:
-                        return f"+{points} ({details.split(' at ')[0]})"
-                    elif points < 0:
-                        return f"{points} ({details.split(' at ')[0]})"
-                    return f"0 ({default_text})"
-
-                # Technical highlights
-                tech_breakdown = breakdown.get("Technical Analysis", {})
-                if "Short-term SMA Cross" in tech_breakdown:
-                    summary_reasons.append(f"Short-term SMA: {get_summary_from_item(tech_breakdown['Short-term SMA Cross'])}")
-                if "Long-term SMA Cross" in tech_breakdown:
-                    summary_reasons.append(f"Long-term SMA: {get_summary_from_item(tech_breakdown['Long-term SMA Cross'])}")
-                if "RSI" in tech_breakdown:
-                    summary_reasons.append(f"RSI: {get_summary_from_item(tech_breakdown['RSI'])}")
-                if "MACD Crossover" in tech_breakdown:
-                    summary_reasons.append(f"MACD: {get_summary_from_item(tech_breakdown['MACD Crossover'])}")
-                if "Volume Activity" in tech_breakdown:
-                    summary_reasons.append(f"Volume: {'High' if tech_breakdown['Volume Activity'].get('points', 0) > 0 else 'Normal'}")
-                # Fundamental highlights
-                fund_breakdown = breakdown.get("Fundamental Analysis", {})
-                if "P/E Ratio" in fund_breakdown:
-                    summary_reasons.append(f"P/E Ratio: {get_summary_from_item(fund_breakdown['P/E Ratio'])}")
-                if "EPS Growth" in fund_breakdown:
-                    summary_reasons.append(f"EPS Growth: {get_summary_from_item(fund_breakdown['EPS Growth'])}")
-                if "Return on Equity (ROE)" in fund_breakdown:
-                    summary_reasons.append(f"ROE: {get_summary_from_item(fund_breakdown['Return on Equity (ROE)'])}")
-                if "Debt to Equity" in fund_breakdown:
-                    summary_reasons.append(f"Debt/Equity: {get_summary_from_item(fund_breakdown['Debt to Equity'])}")
-                # Sentiment highlight
-                sent_breakdown = breakdown.get("Sentiment Analysis", {})
-                if "Overall News Sentiment" in sent_breakdown:
-                    sentiment_details = sent_breakdown["Overall News Sentiment"].get("details", "")
-                    if "Positive" in sentiment_details: summary_reasons.append("News Sentiment: Positive")
-                    elif "Negative" in sentiment_details: summary_reasons.append("News Sentiment: Negative")
-                    else: summary_reasons.append("News Sentiment: Neutral")
-
-                # Limit to top 5 reasons, prioritizing the order they are added
-                final_summary_reason_str = "Analysis based on: " + "; ".join(summary_reasons[:5])
-                if len(summary_reasons) > 5:
-                    final_summary_reason_str += "; ..." # Indicate more reasons if truncated
-                st.markdown(f"**Primary Factors:** {final_summary_reason_str}")
-                
-                # Alerts are displayed in the dual recommendation section above.

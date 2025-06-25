@@ -101,7 +101,7 @@ SWING_RSI_SELL = 70
 SWING_SENTIMENT_SELL_THRESHOLD = -0.2
 SWING_ATH_PREMIUM_SELL = 0.98 # Current price >= 98% of ATH
 
-# Long-Term Investor Thresholds
+# Long-Term Investor Thresholds (These are no longer used in the main app logic but kept for reference)
 LT_PE_BUY_THRESHOLD = 40
 LT_EPS_GROWTH_BUY_THRESHOLD = 0.0 # EPS Growth > 0
 LT_ROE_BUY_THRESHOLD = 0.15 # 15%
@@ -131,20 +131,6 @@ SOURCE_WEIGHTS = {
 }
 
 # --- END OF THRESHOLDS ---
-
-# --- Recommendation Bands based on Final Score ---
-def classify_recommendation(final_score: float) -> str:
-    """Classifies a final score into a recommendation string."""
-    if final_score >= 80:
-        return "Strong Buy"
-    elif 60 <= final_score < 80:
-        return "Buy"
-    elif 40 <= final_score < 60:
-        return "Hold"
-    elif 20 <= final_score < 40: # This is now "Sell"
-        return "Sell"
-    else:  # < 20
-        return "Strong Sell"
 
 # New: News Keywords for granular sentiment analysis
 BULLISH_KEYWORDS_SCORES = {
@@ -313,8 +299,8 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
     indicators = {}
 
     # Ensure enough data for indicators
-    if len(df) < 200: # Max window size for SMAs
-        # pandas-ta might also print its own warnings if data is insufficient for certain indicators
+    # The warning is for SMA200, which is the longest period.
+    if len(df) < 200: 
         logger.warning(f"Not enough historical data ({len(df)} rows) for some indicators (e.g., SMA200 needs 200). Some indicators might be None.")
 
     # Simple Moving Averages
@@ -353,15 +339,15 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
     return indicators
 
 # --- BASIC TECHNICAL ANALYSIS ---
-def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None) -> tuple:
+def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None, all_news_titles: list[str] = None) -> tuple:
     """
     Performs basic stock analysis based on technical indicators and news sentiment.
-    NOTE: This function is kept for compatibility with the basic analysis section in stock_app.py.
-    The comprehensive analysis is now handled by `enhanced_analysis` and `evaluate_stock`.
+    This function is kept for a quick, general overview.
 
     Args:
         historical_data (pd.DataFrame): DataFrame with historical stock data.
         news_sentiment (float, optional): Sentiment score of news (-1 to 1). Defaults to None.
+        all_news_titles (list[str], optional): List of news headlines. Defaults to None.
 
     Returns:
         tuple: (Recommendation: str, Confidence: int, Reason: str)
@@ -410,17 +396,21 @@ def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None) 
             hold_signals += 1
             reasons.append("MACD and MACD Signal are close (Neutral MACD)")
 
-    # News Sentiment
+    # News Sentiment with Headlines
     if news_sentiment is not None:
+        news_headlines_str = ""
+        if all_news_titles:
+            news_headlines_str = f" (e.g., '{' / '.join(all_news_titles[:2])}')" # Add top 2 headlines
+
         if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1 (new threshold)
             buy_signals += 1
-            reasons.append(f"Positive news sentiment ({news_sentiment:.2f})")
+            reasons.append(f"Positive news sentiment ({news_sentiment:.2f}){news_headlines_str}")
         elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0 (new threshold)
             sell_signals += 1
-            reasons.append(f"Negative news sentiment ({news_sentiment:.2f})")
+            reasons.append(f"Negative news sentiment ({news_sentiment:.2f}){news_headlines_str}")
         else: # Neutral
             hold_signals += 1
-            reasons.append(f"Neutral news sentiment ({news_sentiment:.2f})")
+            reasons.append(f"Neutral news sentiment ({news_sentiment:.2f}){news_headlines_str}")
 
     total_signals = buy_signals + sell_signals + hold_signals 
     if total_signals == 0: return "Hold", 0, "No conclusive signals from available data." 
@@ -432,161 +422,10 @@ def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None) 
     elif sell_signals > buy_signals and sell_signals >= hold_signals: return "Sell", final_confidence, "Primary signals suggest Sell: " + "; ".join(reasons)
     else: return "Hold", final_confidence, "Mixed or neutral signals: " + "; ".join(reasons)
 
-# --- CATEGORIZED SCORING ENGINE ---
-
-def _calculate_technical_score(technical_indicators: dict, historical_data: pd.DataFrame) -> tuple[float, dict]:
-    """Calculates a normalized technical score (0-100) and provides a breakdown."""
-    score = 50.0
-    breakdown = {}
-    
-    rsi_val = technical_indicators.get('RSI')
-    if rsi_val is not None:
-        if rsi_val < RSI_OVERSOLD_THRESHOLD:
-            points, details = 15, f"Oversold at {rsi_val:.2f}"
-        elif rsi_val > RSI_OVERBOUGHT_THRESHOLD:
-            points, details = -15, f"Overbought at {rsi_val:.2f}"
-        else:
-            points, details = 0, f"Neutral at {rsi_val:.2f}"
-        score += points
-        breakdown["RSI"] = {"points": points, "details": details}
-    
-    macd_val = technical_indicators.get('MACD')
-    macd_signal_val = technical_indicators.get('MACD_Signal')
-    if macd_val is not None and macd_signal_val is not None:
-        if macd_val > macd_signal_val:
-            points, details = 15, "Bullish"
-        elif macd_val < macd_signal_val:
-            points, details = -15, "Bearish"
-        else:
-            points, details = 0, "Neutral"
-        score += points
-        breakdown["MACD Crossover"] = {"points": points, "details": details}
-    
-    sma_5_val = technical_indicators.get('SMA_5')
-    sma_20_val = technical_indicators.get('SMA_20')
-    if sma_5_val is not None and sma_20_val is not None:
-        if sma_5_val > sma_20_val:
-            points, details = 10, "Bullish"
-        elif sma_5_val < sma_20_val:
-            points, details = -10, "Bearish"
-        else:
-            points, details = 0, "Neutral"
-        score += points
-        breakdown["Short-term SMA Cross"] = {"points": points, "details": details}
-    
-    sma_50_val = technical_indicators.get('SMA_50')
-    sma_200_val = technical_indicators.get('SMA_200')
-    if sma_50_val is not None and sma_200_val is not None:
-        if sma_50_val > sma_200_val:
-            points, details = 10, "Golden Cross"
-        else:
-            points, details = -15, "Death Cross"
-        score += points
-        breakdown["Long-term SMA Cross"] = {"points": points, "details": details}
-    
-    # Volume Activity
-    volume_sma_5 = technical_indicators.get('Volume_SMA_5')
-    current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
-    
-    if volume_sma_5 is not None and current_volume is not None:
-        if current_volume > volume_sma_5 * VOLUME_HIGH_THRESHOLD_MULTIPLIER:
-            points = 5
-            details = f"Current volume {current_volume:,.0f} significantly above 5-day SMA {volume_sma_5:,.0f}"
-        else:
-            points = 0
-            details = f"Current volume {current_volume:,.0f} near 5-day SMA {volume_sma_5:,.0f}"
-        score += points
-        breakdown["Volume Activity"] = {"points": points, "details": details}
-    else:
-        breakdown["Volume Activity"] = {"points": 0, "details": "N/A"}
-    return max(0, min(100, score)), breakdown
-
-def _calculate_fundamental_score(company_fundamentals: dict) -> tuple[float, dict]:
-    """Calculates a normalized fundamental score (0-100) and provides a breakdown."""
-    score = 50.0
-    breakdown = {}
-    
-    pe_ratio = company_fundamentals.get('trailingPE') if company_fundamentals else None
-    eps_growth = company_fundamentals.get('earningsGrowth') if company_fundamentals else None
-    
-    if pe_ratio is not None and not np.isinf(pe_ratio):
-        if pe_ratio < PE_RATIO_UNDERVALUED_THRESHOLD:
-            points, details = 15, f"Undervalued at {pe_ratio:.2f}"
-        elif pe_ratio > PE_RATIO_OVERVALUED_THRESHOLD:
-            points, details = -10, f"Overvalued at {pe_ratio:.2f}"
-        else:
-            points, details = 0, f"Neutral at {pe_ratio:.2f}"
-        score += points
-        breakdown["P/E Ratio"] = {"points": points, "details": details}
-    
-    if eps_growth is not None:
-        if eps_growth > EPS_GROWTH_STRONG_THRESHOLD:
-            points, details = 25, f"Strong at {eps_growth:.2%}"
-        elif eps_growth < -0.30:
-            points, details = -30, f"Decline at {eps_growth:.2%}"
-        elif eps_growth < 0:
-            points, details = -15, f"Negative at {eps_growth:.2%}"
-        else:
-            points, details = 0, f"Neutral at {eps_growth:.2%}"
-        score += points
-        breakdown["EPS Growth"] = {"points": points, "details": details}
-    
-    # Return on Equity (ROE)
-    return_on_equity = company_fundamentals.get('returnOnEquity')
-    if return_on_equity is not None:
-        if return_on_equity > ROE_GOOD_THRESHOLD: # e.g., > 15%
-            points, details = 15, f"Strong at {return_on_equity:.2%}"
-        elif return_on_equity < 0: # Negative ROE
-            points, details = -15, f"Negative at {return_on_equity:.2%}"
-        else:
-            points, details = 0, f"Neutral at {return_on_equity:.2%}"
-        score += points
-        breakdown["Return on Equity (ROE)"] = {"points": points, "details": details}
-    else:
-        breakdown["Return on Equity (ROE)"] = {"points": 0, "details": "N/A"}
-    
-    # Debt to Equity
-    debt_to_equity = company_fundamentals.get('debtToEquity')
-    if debt_to_equity is not None and not np.isinf(debt_to_equity):
-        if debt_to_equity < DEBT_TO_EQUITY_LOW_THRESHOLD: # e.g., < 0.5
-            points, details = 10, f"Low Debt at {debt_to_equity:.2f}"
-        elif debt_to_equity > DEBT_TO_EQUITY_HIGH_THRESHOLD: # e.g., > 1.5
-            points, details = -10, f"High Debt at {debt_to_equity:.2f}"
-        else:
-            points, details = 0, f"Moderate Debt at {debt_to_equity:.2f}"
-        score += points
-        breakdown["Debt to Equity"] = {"points": points, "details": details}
-    else:
-        breakdown["Debt to Equity"] = {"points": 0, "details": "N/A"}
-    
-    return max(0, min(100, score)), breakdown
-
-def _calculate_sentiment_score(news_sentiment: float | None) -> tuple[float, dict]:
-    """Calculates a normalized sentiment score (0-100) and provides a breakdown."""
-    score = 50.0
-    breakdown = {}
-    
-    if news_sentiment is not None: # Sentiment rule: <0 = Negative, 0-0.1 = Neutral, >0.1 = Positive
-        if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1
-            points = 20 # Positive impact
-            sentiment_label = "Positive"
-        elif news_sentiment < NEGATIVE_SENTIMENT_THRESHOLD: # < 0.0
-            points = -20 # Negative impact
-            sentiment_label = "Negative"
-        else: # 0.0 to 0.1 (inclusive of 0.0)
-            points = 0
-            sentiment_label = "Neutral"
-        score += points
-        breakdown["Overall News Sentiment"] = {"points": points, "details": f"{news_sentiment:.2f} ({sentiment_label})"}
-    else:
-        breakdown["Overall News Sentiment"] = {"points": 0, "details": "N/A"}
-    
-    return max(0, min(100, score)), breakdown
-
 # --- DYNAMIC ALERTS GENERATION ---
-def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None, # Keep SMA50/200 for general alerts if needed, even if not in swing confidence
-                            sma_200: float | None, current_price: float | None, # Keep SMA50/200 for general alerts if needed, even if not in swing confidence
-                            overall_news_sentiment: float | None, ath_price: float | None, all_matched_news_themes: list[str]) -> list[str]:
+def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None,
+                            sma_200: float | None, current_price: float | None,
+                            overall_news_sentiment: float | None, ath_price: float | None, all_matched_news_themes: list[str], all_news_titles: list[str]) -> list[str]:
     """
     Generates dynamic alerts based on various technical and sentiment conditions.
     """
@@ -634,31 +473,38 @@ def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: f
         if current_price >= PRICE_NEAR_ATH_THRESHOLD * ath_price:
             alerts.append("📈 Near 1-year high – check valuation.")
 
+    # Helper to append news headlines to alerts
+    def append_headlines(alert_msg: str) -> str:
+        if all_news_titles:
+            sample_headlines = all_news_titles[:2] # Take up to 2 headlines
+            return f"{alert_msg} (e.g., '{' / '.join(sample_headlines)}')"
+        return alert_msg
+
     # News Alerts (more granular based on themes)
     if all_matched_news_themes:
         for theme in sorted(list(set(all_matched_news_themes))): # Deduplicate and sort themes
             # Check if the theme is explicitly defined in NEWS_THEMES
             if theme in NEWS_THEMES:
                 # Determine if the theme is generally bullish or bearish based on its keywords
-                is_bullish_theme = any(k in BULLISH_KEYWORDS_SCORES for k in NEWS_THEMES[theme])
-                is_bearish_theme = any(k in BEARISH_KEYWORDS_SCORES for k in NEWS_THEMES[theme])
+                is_bullish_theme = any(k in BULLISH_KEYWORDS_SCORES for k in NEWS_THEMES[theme] if k in BULLISH_KEYWORDS_SCORES)
+                is_bearish_theme = any(k in BEARISH_KEYWORDS_SCORES for k in NEWS_THEMES[theme] if k in BEARISH_KEYWORDS_SCORES)
                 
                 if is_bullish_theme and not is_bearish_theme:
-                    alerts.append(f"📢 News: {theme} detected – strong positive signal.")
+                    alerts.append(append_headlines(f"📢 News: {theme} detected – strong positive signal."))
                 elif is_bearish_theme and not is_bullish_theme:
-                    alerts.append(f"📰 News: {theme} detected – strong negative signal.")
+                    alerts.append(append_headlines(f"📰 News: {theme} detected – strong negative signal."))
                 else: # Mixed or neutral theme (e.g., if keywords are both bullish and bearish, or none)
-                    alerts.append(f"ℹ️ News: {theme} detected – mixed sentiment.")
+                    alerts.append(append_headlines(f"ℹ️ News: {theme} detected – mixed sentiment."))
             else: # Fallback for themes not explicitly mapped (e.g., "Bullish: some_keyword")
-                alerts.append(f"ℹ️ News: {theme} detected.")
+                alerts.append(append_headlines(f"ℹ️ News: {theme} detected."))
     else: # If no specific news themes were matched, use general sentiment alerts
         if overall_news_sentiment is not None:
-            if overall_news_sentiment < NEWS_SENTIMENT_STRONG_NEGATIVE_THRESHOLD:
-                alerts.append("📰 Overall news sentiment is strongly negative – caution advised.")
-            elif overall_news_sentiment > NEWS_SENTIMENT_STRONG_POSITIVE_THRESHOLD:
-                alerts.append("📢 Overall news sentiment is strongly positive – market optimism.")
+            if overall_news_sentiment < NEWS_SENTIMENT_STRONG_NEGATIVE_THRESHOLD: # sentiment < -0.4
+                alerts.append(append_headlines("📰 Overall news sentiment is strongly negative – caution advised."))
+            elif overall_news_sentiment > NEWS_SENTIMENT_STRONG_POSITIVE_THRESHOLD: # sentiment > 0.4
+                alerts.append(append_headlines("📢 Overall news sentiment is strongly positive – market optimism."))
             else:
-                alerts.append("ℹ️ Overall news sentiment is neutral.")
+                alerts.append(append_headlines("ℹ️ Overall news sentiment is neutral."))
 
     return alerts
 
@@ -772,7 +618,9 @@ def evaluate_swing(data: dict) -> dict:
 
     # --- Filter relevant alerts ---
     for alert in all_alerts: # Filter alerts for swing trading relevance
-        if any(keyword in alert for keyword in ["RSI", "MACD", "Oversold", "Overbought", "Bullish", "Bearish", "Positive sentiment", "Negative news trend", "SMA", "volume"]):
+        # This filtering is now less critical as generate_dynamic_alerts is more targeted
+        # but still good to have for robustness if alert types change.
+        if any(keyword in alert for keyword in ["RSI", "MACD", "Oversold", "Overbought", "Bullish", "Bearish", "Positive sentiment", "Negative news trend", "SMA", "volume", "News:"]):
             swing_specific_alerts.append(alert)
     
     if not swing_specific_alerts and recommendation == "Hold":
@@ -793,9 +641,10 @@ def evaluate_stock(
     technical_indicators: dict,
     company_fundamentals: dict,
     overall_news_sentiment: float | None,
-    current_price: float | None, # Keep for alerts
-    all_time_high: float | None, # Keep for alerts
-    all_matched_news_themes: list[str] # New parameter for granular news alerts
+    current_price: float | None,
+    all_time_high: float | None,
+    all_matched_news_themes: list[str],
+    all_news_titles: list[str] # Pass all news titles for alerts
 ) -> dict:
     """
     Orchestrates the swing trader recommendation system.
@@ -810,9 +659,9 @@ def evaluate_stock(
     current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
     volume_sma_5 = technical_indicators.get('Volume_SMA_5')
 
-    # Generate all dynamic alerts once
-    all_dynamic_alerts = generate_dynamic_alerts(rsi, macd_hist, sma_5, sma_10, current_volume, volume_sma_5, sma_50, sma_200, # Pass SMA50/200 for general alerts
-                                                 current_price, overall_news_sentiment, all_time_high, all_matched_news_themes)
+    # Generate all dynamic alerts once, passing all news titles
+    all_dynamic_alerts = generate_dynamic_alerts(rsi, macd_hist, sma_5, sma_10, current_volume, volume_sma_5, sma_50, sma_200,
+                                                 current_price, overall_news_sentiment, all_time_high, all_matched_news_themes, all_news_titles)
 
     data_for_eval = {
         "SMA_5": technical_indicators.get('SMA_5'),
@@ -826,10 +675,12 @@ def evaluate_stock(
         "MACD_Hist": technical_indicators.get('MACD_Hist'), # Added for swing
         "Volume_SMA_5": technical_indicators.get('Volume_SMA_5'),
         "current_volume": current_volume, # Pass current volume
-        "PE_ratio": company_fundamentals.get('trailingPE'), # Kept for enhanced_analysis
-        "EPS_growth": company_fundamentals.get('earningsGrowth'), # Kept for enhanced_analysis
-        "ROE": company_fundamentals.get('returnOnEquity'), # Kept for enhanced_analysis
-        "D_E_ratio": company_fundamentals.get('debtToEquity'), # Kept for enhanced_analysis
+        # Fundamental data is no longer used for scoring in swing_trader, but kept in company_fundamentals
+        # for potential future use or display in other sections if needed.
+        "PE_ratio": company_fundamentals.get('trailingPE'), 
+        "EPS_growth": company_fundamentals.get('earningsGrowth'), 
+        "ROE": company_fundamentals.get('returnOnEquity'), 
+        "D_E_ratio": company_fundamentals.get('debtToEquity'), 
         "sentiment": overall_news_sentiment,
         "current_price": current_price,
         "ATH": all_time_high,
@@ -841,41 +692,6 @@ def evaluate_stock(
     return {
         "swing_trader": swing_result
     }
-
-# --- ADVANCED ANALYSIS ---
-def enhanced_analysis(historical_data: pd.DataFrame, technical_indicators: dict, company_fundamentals: dict, news_sentiment: float | None) -> tuple:
-    """
-    Performs an enhanced, categorized, and simplified stock analysis.
-    This function now focuses on providing category scores and breakdowns,
-    as the main recommendations are handled by `evaluate_stock`.
-
-    Returns:
-        tuple: (Master_Breakdown, Category_Scores, Final_Score_Value)
-    """
-    # 1. Calculate scores for each category
-    tech_score, tech_breakdown = _calculate_technical_score(technical_indicators, historical_data)
-    fund_score, fund_breakdown = _calculate_fundamental_score(company_fundamentals)
-    sent_score, sent_breakdown = _calculate_sentiment_score(news_sentiment) # Alerts are now generated by generate_dynamic_alerts
-
-    category_scores = {
-        "Technical": tech_score,
-        "Fundamental": fund_score,
-        "Sentiment": sent_score,
-    }
-
-    # 2. Calculate final weighted score (using a simple average, no sector-specific weights)
-    final_score_value = (tech_score + fund_score + sent_score) / 3
-
-    # 3. Combine all breakdowns for a full report
-    master_breakdown = {
-        "Technical Analysis": tech_breakdown,
-        "Fundamental Analysis": fund_breakdown,
-        "Sentiment Analysis": sent_breakdown,
-    }
-
-    # Note: Recommendation, Confidence_Level, and Alerts are now handled by evaluate_stock
-    # and its sub-functions (evaluate_swing, evaluate_long_term)
-    return master_breakdown, category_scores, final_score_value
 
 # --- UTILITY FUNCTIONS ---
 def analyze_sentiment(text: str) -> float:
@@ -1254,36 +1070,17 @@ if __name__ == "__main__":
             logger.warning("Could not fetch news sentiment from any source.")
 
         # 4. Basic Analysis (using overall news sentiment)
-        basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment)
+        basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment, all_news_titles)
         logger.info(f"\n--- Basic Analysis for {TICKER} ---")
         logger.info(f"Recommendation: {basic_recommendation} (Confidence: {basic_confidence}%)")
         logger.info(f"Reason: {basic_reason}")
 
-        # 5. Enhanced Analysis (Category Scores & Breakdown)
-        master_breakdown, category_scores, final_score_value = enhanced_analysis(
-            historical_data,
-            technical_indicators,
-            company_fundamentals,
-            overall_news_sentiment
-        )
-
-        logger.info(f"\n--- Enhanced Analysis Breakdown for {TICKER} ---")
-        logger.info("Category Scores:")
-        for category, score in category_scores.items():
-            logger.info(f"  - {category}: {score:.2f}/100")
-
-        logger.info("Reason Breakdown:")
-        for category, details in master_breakdown.items():
-            logger.info(f"  - {category}:")
-            for reason, value in details.items():
-                logger.info(f"    - {reason}: {value}")
-        
         # Swing Trader Recommendation System
         logger.info(f"\n--- Swing Trader Recommendation System for {TICKER} ---")
         # ATH is now part of company_fundamentals
         all_time_high_for_period = company_fundamentals.get('ath_from_period')
         swing_analysis_results = evaluate_stock(
-            historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period, all_matched_news_themes
+            historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period, all_matched_news_themes, all_news_titles
         )
         logger.info("\nSwing Trader Recommendation:")
         logger.info(f"  Recommendation: {swing_analysis_results['swing_trader']['recommendation']}")
