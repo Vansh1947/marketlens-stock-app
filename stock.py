@@ -11,6 +11,7 @@ import numpy as np
 from textblob import TextBlob
 from datetime import datetime, timedelta
 import re # Added for regex in news filtering
+import random # For sampling headlines
 
 import logging
 
@@ -400,7 +401,9 @@ def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None, 
     if news_sentiment is not None:
         news_headlines_str = ""
         if all_news_titles:
-            news_headlines_str = f" (e.g., '{' / '.join(all_news_titles[:2])}')" # Add top 2 headlines
+            # Use a random sample of headlines for the basic analysis reason
+            sample_headlines = random.sample(all_news_titles, min(len(all_news_titles), 2))
+            news_headlines_str = f" (e.g., '{' / '.join(sample_headlines)}')"
 
         if news_sentiment > POSITIVE_SENTIMENT_THRESHOLD: # > 0.1 (new threshold)
             buy_signals += 1
@@ -425,11 +428,13 @@ def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None, 
 # --- DYNAMIC ALERTS GENERATION ---
 def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None,
                             sma_200: float | None, current_price: float | None,
-                            overall_news_sentiment: float | None, ath_price: float | None, all_matched_news_themes: list[str], all_news_titles: list[str]) -> list[str]:
+                            overall_news_sentiment: float | None, ath_price: float | None, all_news_articles_data: list[tuple[float, float, list[str], str]]) -> list[str]:
     """
     Generates dynamic alerts based on various technical and sentiment conditions.
+    all_news_articles_data: List of (sentiment, weight, themes, title) for each article.
     """
     alerts = []
+    processed_news_alerts = set() # Use a set to avoid duplicate news alerts from different articles triggering the same theme
 
     # RSI Alerts
     if rsi is not None:
@@ -474,37 +479,58 @@ def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: f
             alerts.append("📈 Near 1-year high – check valuation.")
 
     # Helper to append news headlines to alerts
-    def append_headlines(alert_msg: str) -> str:
-        if all_news_titles:
-            sample_headlines = all_news_titles[:2] # Take up to 2 headlines
+    def append_headlines_to_alert(alert_msg: str, headlines: list[str]) -> str:
+        if headlines:
+            # Use a random sample of headlines for the alert
+            sample_headlines = random.sample(headlines, min(len(headlines), 2))
             return f"{alert_msg} (e.g., '{' / '.join(sample_headlines)}')"
         return alert_msg
 
-    # News Alerts (more granular based on themes)
-    if all_matched_news_themes:
-        for theme in sorted(list(set(all_matched_news_themes))): # Deduplicate and sort themes
-            # Check if the theme is explicitly defined in NEWS_THEMES
-            if theme in NEWS_THEMES:
-                # Determine if the theme is generally bullish or bearish based on its keywords
-                is_bullish_theme = any(k in BULLISH_KEYWORDS_SCORES for k in NEWS_THEMES[theme] if k in BULLISH_KEYWORDS_SCORES)
-                is_bearish_theme = any(k in BEARISH_KEYWORDS_SCORES for k in NEWS_THEMES[theme] if k in BEARISH_KEYWORDS_SCORES)
-                
-                if is_bullish_theme and not is_bearish_theme:
-                    alerts.append(append_headlines(f"📢 News: {theme} detected – strong positive signal."))
-                elif is_bearish_theme and not is_bullish_theme:
-                    alerts.append(append_headlines(f"📰 News: {theme} detected – strong negative signal."))
-                else: # Mixed or neutral theme (e.g., if keywords are both bullish and bearish, or none)
-                    alerts.append(append_headlines(f"ℹ️ News: {theme} detected – mixed sentiment."))
-            else: # Fallback for themes not explicitly mapped (e.g., "Bullish: some_keyword")
-                alerts.append(append_headlines(f"ℹ️ News: {theme} detected."))
-    else: # If no specific news themes were matched, use general sentiment alerts
-        if overall_news_sentiment is not None:
-            if overall_news_sentiment < NEWS_SENTIMENT_STRONG_NEGATIVE_THRESHOLD: # sentiment < -0.4
-                alerts.append(append_headlines("📰 Overall news sentiment is strongly negative – caution advised."))
-            elif overall_news_sentiment > NEWS_SENTIMENT_STRONG_POSITIVE_THRESHOLD: # sentiment > 0.4
-                alerts.append(append_headlines("📢 Overall news sentiment is strongly positive – market optimism."))
-            else:
-                alerts.append(append_headlines("ℹ️ Overall news sentiment is neutral."))
+    # News Alerts (more granular based on themes from individual articles)
+    if all_news_articles_data:
+        for article_sentiment, article_weight, article_themes, article_title in all_news_articles_data:
+            article_headlines = [article_title] # Use the specific article's title for its alert
+
+            bullish_themes_in_article = set()
+            bearish_themes_in_article = set()
+            mixed_themes_in_article = set()
+
+            for theme in article_themes:
+                is_bullish = any(k in BULLISH_KEYWORDS_SCORES for k in NEWS_THEMES.get(theme, []) if k in BULLISH_KEYWORDS_SCORES)
+                is_bearish = any(k in BEARISH_KEYWORDS_SCORES for k in NEWS_THEMES.get(theme, []) if k in BEARISH_KEYWORDS_SCORES)
+
+                if is_bullish and not is_bearish:
+                    bullish_themes_in_article.add(theme)
+                elif is_bearish and not is_bullish:
+                    bearish_themes_in_article.add(theme)
+                else:
+                    mixed_themes_in_article.add(theme)
+            
+            # Prioritize alerts from this single article to avoid direct contradictions
+            # If an article has both strong bullish and strong bearish themes, prioritize bearish
+            if bearish_themes_in_article:
+                for theme in sorted(list(bearish_themes_in_article)):
+                    processed_news_alerts.add(append_headlines_to_alert(f"📰 News: {theme} detected – strong negative signal.", article_headlines))
+            elif bullish_themes_in_article:
+                for theme in sorted(list(bullish_themes_in_article)):
+                    processed_news_alerts.add(append_headlines_to_alert(f"📢 News: {theme} detected – strong positive signal.", article_headlines))
+            
+            # Mixed themes are less critical, but still informative
+            if mixed_themes_in_article:
+                for theme in sorted(list(mixed_themes_in_article)):
+                    processed_news_alerts.add(append_headlines_to_alert(f"ℹ️ News: {theme} detected – mixed sentiment.", article_headlines))
+    
+    # Add all unique processed news alerts to the main alerts list
+    alerts.extend(list(processed_news_alerts))
+
+    # Fallback for general sentiment if no specific themes were matched across all articles
+    if not processed_news_alerts and overall_news_sentiment is not None:
+        if overall_news_sentiment < NEWS_SENTIMENT_STRONG_NEGATIVE_THRESHOLD: # sentiment < -0.4
+            alerts.append(append_headlines_to_alert("📰 Overall news sentiment is strongly negative – caution advised.", all_news_titles))
+        elif overall_news_sentiment > NEWS_SENTIMENT_STRONG_POSITIVE_THRESHOLD: # sentiment > 0.4
+            alerts.append(append_headlines_to_alert("📢 Overall news sentiment is strongly positive – market optimism.", all_news_titles))
+        else:
+            alerts.append(append_headlines_to_alert("ℹ️ Overall news sentiment is neutral.", all_news_titles))
 
     return alerts
 
@@ -643,7 +669,7 @@ def evaluate_stock(
     overall_news_sentiment: float | None,
     current_price: float | None,
     all_time_high: float | None,
-    all_matched_news_themes: list[str],
+    all_news_articles_data: list[tuple[float, float, list[str], str]], # Changed from all_matched_news_themes
     all_news_titles: list[str] # Pass all news titles for alerts
 ) -> dict:
     """
@@ -659,9 +685,9 @@ def evaluate_stock(
     current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
     volume_sma_5 = technical_indicators.get('Volume_SMA_5')
 
-    # Generate all dynamic alerts once, passing all news titles
+    # Generate all dynamic alerts once, passing all news titles and detailed article data
     all_dynamic_alerts = generate_dynamic_alerts(rsi, macd_hist, sma_5, sma_10, current_volume, volume_sma_5, sma_50, sma_200,
-                                                 current_price, overall_news_sentiment, all_time_high, all_matched_news_themes, all_news_titles)
+                                                 current_price, overall_news_sentiment, all_time_high, all_news_articles_data, all_news_titles)
 
     data_for_eval = {
         "SMA_5": technical_indicators.get('SMA_5'),
@@ -729,10 +755,10 @@ def get_source_weight(source_name: str) -> float:
     if "google news" in normalized_name: return SOURCE_WEIGHTS["Google News"] # For GNews/RSS
     return SOURCE_WEIGHTS.get(source_name, SOURCE_WEIGHTS["Unknown Blog"])
 
-def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float, list[str]]], list[str]]:
+def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float, list[str], str]], list[str]]:
     """
     Fetches recent news articles for a given ticker symbol from NewsAPI
-    filters them, and returns a list of (sentiment, weight, themes) tuples and titles.
+    filters them, and returns a list of (sentiment, weight, themes, title) tuples and titles.
     """
     if not api_key:
         logger.warning("NewsAPI key not provided. Skipping NewsAPI fetch.")
@@ -743,8 +769,8 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, c
         return [], []
 
     newsapi_client = NewsApiClient(api_key=api_key)
-    results = [] # List of (sentiment, weight, themes) tuples
-    news_titles = []
+    results = [] # List of (sentiment, weight, themes, title) tuples
+    all_titles_for_overall_display = [] # Flat list of all titles for overall display
     try:
         # Fetch news from the last 7 days (free tier usually limits to 30 days history)
         from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
@@ -770,12 +796,12 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, c
                     keyword_sentiment, matched_themes = analyze_news_keywords(article_text)
                     combined_sentiment = max(-1.0, min(1.0, raw_sentiment + keyword_sentiment))
                     weight = get_source_weight(source_name)
-                    results.append((combined_sentiment, weight, matched_themes))
-                    news_titles.append(title)
+                    results.append((combined_sentiment, weight, matched_themes, title))
+                    all_titles_for_overall_display.append(title)
             
             if results:
-                logger.info(f"Fetched {len(news_titles)} relevant articles from NewsAPI for {ticker_symbol}.")
-                return results, news_titles
+                logger.info(f"Fetched {len(all_titles_for_overall_display)} relevant articles from NewsAPI for {ticker_symbol}.")
+                return results, all_titles_for_overall_display
         logger.info(f"No relevant news found for {ticker_symbol} from NewsAPI.")
         return [], []
     except NewsAPIException as e: # type: ignore [misc] # misc because NewsAPIException could be the mock
@@ -831,16 +857,16 @@ def is_stock_mentioned(news_article_text: str, ticker: str, company_name: str | 
     
     return bool(combined_pattern.search(news_article_text))
 
-def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str, company_name: str | None) -> tuple[list[tuple[float, float, list[str]]], list[str]]:
+def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str, company_name: str | None) -> tuple[list[tuple[float, float, list[str], str]], list[str]]:
     """
     Fetches news from an RSS feed, filters by ticker symbol,
-    and returns a list of (sentiment, weight, themes) tuples and titles.
+    and returns a list of (sentiment, weight, themes, title) tuples and titles.
     """
     if feedparser is None:
         return [], []
 
     results = []
-    news_titles = []
+    all_titles_for_overall_display = []
     try:
         feed = feedparser.parse(rss_url)
         if not feed.entries:
@@ -857,19 +883,19 @@ def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str, company_name
                 keyword_sentiment, matched_themes = analyze_news_keywords(article_text)
                 combined_sentiment = max(-1.0, min(1.0, raw_sentiment + keyword_sentiment))
                 weight = get_source_weight(source_name)
-                results.append((combined_sentiment, weight, matched_themes))
-                news_titles.append(title)
+                results.append((combined_sentiment, weight, matched_themes, title))
+                all_titles_for_overall_display.append(title)
 
         if results:
-            logger.info(f"Fetched {len(news_titles)} relevant articles from RSS for {ticker_symbol}.")
-            return results, news_titles
+            logger.info(f"Fetched {len(all_titles_for_overall_display)} relevant articles from RSS for {ticker_symbol}.")
+            return results, all_titles_for_overall_display
         logger.info(f"No relevant news found for {ticker_symbol} in RSS feed.")
         return [], []
     except Exception as e:
         logger.error(f"Error fetching RSS news from {rss_url}: {e}")
         return [], []
 
-def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float, list[str]]], list[str]]: # type: ignore
+def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float, list[str], str]], list[str]]: # type: ignore
     """
     Fetches news for a given ticker symbol from GNews and calculates sentiment.
         ticker_symbol (str): The stock ticker symbol (often for .NS market).
@@ -885,7 +911,7 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, com
     
     query = f"{ticker_symbol} stock news"
     results = []
-    news_titles = []
+    all_titles_for_overall_display = []
     try:
         # Assuming gnews_client.get_news(query) returns a list of article-like objects
         # Each object is expected to have 'title' and 'description' attributes or similar.
@@ -905,11 +931,11 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, com
                     keyword_sentiment, matched_themes = analyze_news_keywords(article_text)
                     combined_sentiment = max(-1.0, min(1.0, raw_sentiment + keyword_sentiment))
                     weight = get_source_weight(source_name)
-                    results.append((combined_sentiment, weight, matched_themes))
-                    news_titles.append(title)
+                    results.append((combined_sentiment, weight, matched_themes, title))
+                    all_titles_for_overall_display.append(title)
             if results:
-                logger.info(f"Fetched {len(news_titles)} relevant articles from GNews for {ticker_symbol}.")
-                return results, news_titles
+                logger.info(f"Fetched {len(all_titles_for_overall_display)} relevant articles from GNews for {ticker_symbol}.")
+                return results, all_titles_for_overall_display
         logger.info(f"No relevant news found for {ticker_symbol} from GNews.")
         return [], []
     except Exception as e:
@@ -1026,34 +1052,27 @@ if __name__ == "__main__":
         env_news_api_key = os.environ.get("NEWS_API_KEY")
         env_gnews_api_key = os.environ.get("GNEWS_API_KEY")
 
-        all_weighted_sentiments_with_themes = []
-        all_news_titles = []
-        all_matched_news_themes = [] # Collect all matched themes here
+        all_news_articles_data = [] # List of (sentiment, weight, themes, title) for each article
+        all_news_titles_for_overall_display = [] # Flat list of all titles for overall display
 
         newsapi_results, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key, company_long_name)
-        all_weighted_sentiments_with_themes.extend(newsapi_results)
-        all_news_titles.extend(newsapi_titles)
-        for _, _, themes in newsapi_results:
-            all_matched_news_themes.extend(themes)
+        all_news_articles_data.extend(newsapi_results)
+        all_news_titles_for_overall_display.extend(newsapi_titles)
 
         ticker_specific_rss_url = BASE_GOOGLE_NEWS_RSS_URL.format(ticker=TICKER)
         rss_results, rss_titles = fetch_news_sentiment_from_rss(ticker_specific_rss_url, TICKER, company_long_name)
-        all_weighted_sentiments_with_themes.extend(rss_results)
-        all_news_titles.extend(rss_titles)
-        for _, _, themes in rss_results:
-            all_matched_news_themes.extend(themes)
+        all_news_articles_data.extend(rss_results)
+        all_news_titles_for_overall_display.extend(rss_titles)
 
         gnews_results, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key, company_long_name)
-        all_weighted_sentiments_with_themes.extend(gnews_results)
-        all_news_titles.extend(gnews_titles)
-        for _, _, themes in gnews_results:
-            all_matched_news_themes.extend(themes)
+        all_news_articles_data.extend(gnews_results)
+        all_news_titles_for_overall_display.extend(gnews_titles)
 
         overall_news_sentiment = None
-        if all_weighted_sentiments_with_themes:
-            # Calculate weighted average
-            total_sentiment_score = sum(s * w for s, w, _ in all_weighted_sentiments_with_themes)
-            total_weight = sum(w for s, w, _ in all_weighted_sentiments_with_themes)
+        if all_news_articles_data:
+            # Calculate weighted average from all articles' data
+            total_sentiment_score = sum(s * w for s, w, _, _ in all_news_articles_data)
+            total_weight = sum(w for s, w, _, _ in all_news_articles_data)
             if total_weight > 0:
                 overall_news_sentiment = total_sentiment_score / total_weight
             else:
@@ -1064,13 +1083,13 @@ if __name__ == "__main__":
             logger.info(f"Overall News Sentiment: {overall_news_sentiment:.2f}")
             logger.info("Recent News Titles (sample):")
             # Convert to set to get unique titles, then back to list for slicing
-            for i, title in enumerate(list(set(all_news_titles))[:10]):
+            for i, title in enumerate(list(set(all_news_titles_for_overall_display))[:10]):
                 logger.info(f"  - {title}")
         else:
             logger.warning("Could not fetch news sentiment from any source.")
 
         # 4. Basic Analysis (using overall news sentiment)
-        basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment, all_news_titles)
+        basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment, all_news_titles_for_overall_display)
         logger.info(f"\n--- Basic Analysis for {TICKER} ---")
         logger.info(f"Recommendation: {basic_recommendation} (Confidence: {basic_confidence}%)")
         logger.info(f"Reason: {basic_reason}")
@@ -1080,7 +1099,7 @@ if __name__ == "__main__":
         # ATH is now part of company_fundamentals
         all_time_high_for_period = company_fundamentals.get('ath_from_period')
         swing_analysis_results = evaluate_stock(
-            historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period, all_matched_news_themes, all_news_titles
+            historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period, all_news_articles_data, all_news_titles_for_overall_display
         )
         logger.info("\nSwing Trader Recommendation:")
         logger.info(f"  Recommendation: {swing_analysis_results['swing_trader']['recommendation']}")

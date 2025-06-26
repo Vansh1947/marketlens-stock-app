@@ -290,41 +290,36 @@ if st.button("Analyze Stock"):
                 st.write(f"**Debt to Equity:** {f'{debt_to_equity:.2f}' if isinstance(debt_to_equity, (int, float)) else 'N/A'}")
 
             # 3. Fetch News Sentiment (from NewsAPI and GNews)
-            all_weighted_sentiments = []
-            combined_news_titles = []
-            all_matched_news_themes = [] # New: Collect all matched news themes here
+            all_news_articles_data = [] # List of (sentiment, weight, themes, title) for each article
+            all_news_titles_for_overall_display = [] # Flat list of all titles for overall display
 
             # Fetch NewsAPI sentiment if key is available
             if APP_NEWS_API_KEY: # Check if the NewsAPI key is configured
                 newsapi_results, newsapi_titles = cached_fetch_news_sentiment_from_newsapi(ticker_symbol_processed, APP_NEWS_API_KEY, company_long_name)
-                all_weighted_sentiments.extend(newsapi_results)
-                combined_news_titles.extend(newsapi_titles) # Add titles from NewsAPI
+                all_news_articles_data.extend(newsapi_results)
+                all_news_titles_for_overall_display.extend(newsapi_titles)
 
             # Attempt GNews if key is present (useful for broader coverage or specific regions like India)
             # Check if the GNews API key is configured
             if APP_GNEWS_API_KEY: 
                 st.write(f"Attempting to fetch news from GNews for {ticker_symbol_processed}...") # User feedback
                 gnews_results, gnews_titles = cached_fetch_news_sentiment_from_gnews(ticker_symbol_processed, APP_GNEWS_API_KEY, company_long_name) # Pass the API key
-                all_weighted_sentiments.extend(gnews_results)
-                combined_news_titles.extend(gnews_titles) # Add titles from GNews
-
-            # Extract all matched themes from the fetched news results
-            for _, _, themes in all_weighted_sentiments:
-                all_matched_news_themes.extend(themes)
+                all_news_articles_data.extend(gnews_results)
+                all_news_titles_for_overall_display.extend(gnews_titles)
 
             overall_news_sentiment = None
-            if all_weighted_sentiments: # Check if there's any news data
-                total_sentiment_score = sum(s * w for s, w, _ in all_weighted_sentiments) # Unpack the tuple
-                total_weight = sum(w for s, w, _ in all_weighted_sentiments) # Unpack the tuple
+            if all_news_articles_data: # Check if there's any news data
+                total_sentiment_score = sum(s * w for s, w, _, _ in all_news_articles_data) # Unpack the tuple
+                total_weight = sum(w for s, w, _, _ in all_news_articles_data) # Unpack the tuple
                 if total_weight > 0:
                     overall_news_sentiment = total_sentiment_score / total_weight
                 else:
                     overall_news_sentiment = None # Avoid division by zero if all weights are zero
 
-            # De-duplicate news titles
-            if combined_news_titles:
-                unique_titles = list(dict.fromkeys(combined_news_titles)) # More efficient deduplication
-                combined_news_titles = unique_titles
+            # De-duplicate news titles for overall display
+            if all_news_titles_for_overall_display:
+                unique_titles = list(dict.fromkeys(all_news_titles_for_overall_display)) # More efficient deduplication
+                all_news_titles_for_overall_display = unique_titles
 
             st.markdown("---") # Visual separator
             with st.expander("📰 News Sentiment Details", expanded=False): # Added emoji
@@ -332,7 +327,7 @@ if st.button("Analyze Stock"):
                     st.write(f"**Overall Weighted News Sentiment:** {overall_news_sentiment:.2f}")
                     st.write("Recent News Titles (sample):")
                     # Display more unique titles (up to 10)
-                    for i, title in enumerate(combined_news_titles[:10]):
+                    for i, title in enumerate(all_news_titles_for_overall_display[:10]):
                         st.write(f"• {title}") # Use bullet points
                 # If after all sources, there's still no overall sentiment
                 if overall_news_sentiment is None:
@@ -342,7 +337,7 @@ if st.button("Analyze Stock"):
             st.markdown("---") # Visual separator
             # 4. Basic Analysis (Kept for compatibility)
             with st.expander("🔬 Basic Analysis (Technical + News Sentiment)", expanded=False): # Added emoji
-                basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment, combined_news_titles)
+                basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment, all_news_titles_for_overall_display)
                 st.write(f"**Recommendation:** {basic_recommendation} (Confidence: {basic_confidence}%)")
                 st.write(f"**Reason:** {basic_reason}")
             
@@ -355,7 +350,7 @@ if st.button("Analyze Stock"):
             all_time_high_for_period = company_fundamentals.get('ath_from_period')
             # Pass the collected news themes to evaluate_stock
             swing_analysis_results = evaluate_stock(
-                historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period, all_matched_news_themes, combined_news_titles # Pass all news titles
+                historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period, all_news_articles_data, all_news_titles_for_overall_display # Pass all news titles
             ) # This now returns only swing_trader results
             
             st.subheader("📈 Swing Trader Recommendation")
