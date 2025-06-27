@@ -414,16 +414,48 @@ def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None, 
         else: # Neutral
             hold_signals += 1
             reasons.append(f"Neutral news sentiment ({news_sentiment:.2f}){news_headlines_str}")
+    
+    # --- NEW CONFIDENCE LOGIC (aligned with swing trader philosophy) ---
+    total_signals = buy_signals + sell_signals + hold_signals
+    if total_signals == 0:
+        return "Hold", 0, "No conclusive signals from available data."
 
-    total_signals = buy_signals + sell_signals + hold_signals 
-    if total_signals == 0: return "Hold", 0, "No conclusive signals from available data." 
-    if buy_signals > sell_signals: final_confidence = int((buy_signals / total_signals) * 100)
-    elif sell_signals > buy_signals: final_confidence = int((sell_signals / total_signals) * 100)
-    else: final_confidence = 50 # Neutral confidence
-    final_confidence = max(0, min(final_confidence, 100)) # Ensure it's within 0-100
-    if buy_signals > sell_signals and buy_signals >= hold_signals: return "Buy", final_confidence, "Primary signals suggest Buy: " + "; ".join(reasons)
-    elif sell_signals > buy_signals and sell_signals >= hold_signals: return "Sell", final_confidence, "Primary signals suggest Sell: " + "; ".join(reasons)
-    else: return "Hold", final_confidence, "Mixed or neutral signals: " + "; ".join(reasons)
+    # Determine recommendation based on signal counts
+    if buy_signals > sell_signals:
+        recommendation = "Buy"
+    elif sell_signals > buy_signals:
+        recommendation = "Sell"
+    else:
+        recommendation = "Hold"
+
+    # Calculate a net score and normalize it to a -1 to +1 range based on directional signals
+    net_score = buy_signals - sell_signals
+    directional_signals = buy_signals + sell_signals
+    if directional_signals == 0:
+        normalized_score = 0.0
+    else:
+        normalized_score = net_score / directional_signals
+
+    # Scale to a 0-100 signal strength (0=max sell, 50=neutral, 100=max buy)
+    signal_strength = int(normalized_score * 50 + 50)
+
+    # Calculate confidence based on the recommendation
+    confidence = 0
+    if recommendation == "Buy":
+        confidence = signal_strength
+    elif recommendation == "Sell":
+        confidence = 100 - signal_strength
+    elif recommendation == "Hold":
+        # For Hold, confidence is how many signals were neutral out of the total.
+        confidence = int((hold_signals / total_signals) * 100)
+
+    confidence = max(0, min(100, confidence)) # Ensure 0-100 range
+
+    # Construct final reason string
+    reason_str = "; ".join(reasons)
+    final_reason = f"Primary signals suggest {recommendation}: {reason_str}" if recommendation != "Hold" else f"Mixed or neutral signals: {reason_str}"
+
+    return recommendation, confidence, final_reason
 
 # --- DYNAMIC ALERTS GENERATION ---
 def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None,
@@ -622,6 +654,7 @@ def evaluate_swing(data: dict) -> dict:
     scores["News"] = sentiment_score
 
     # --- Calculate weighted sum and final confidence ---
+    # The weighted_sum ranges from -1 (max bearish) to +1 (max bullish).
     weighted_sum = (
         scores["MACD"] * 0.30 +
         scores["RSI"] * 0.20 +
@@ -630,17 +663,31 @@ def evaluate_swing(data: dict) -> dict:
         scores["News"] * 0.20
     )
     
-    # Scale to 0-100: sum(weighted_scores) * 50 + 50
-    confidence = int(weighted_sum * 50 + 50)
-    confidence = max(0, min(100, confidence)) # Ensure 0-100 range
+    # Scale weighted_sum to a 0-100 range, where 0 is strongest sell, 50 is neutral, 100 is strongest buy.
+    overall_signal_strength = int(weighted_sum * 50 + 50)
+    overall_signal_strength = max(0, min(100, overall_signal_strength)) # Ensure 0-100 range
 
-    # --- Determine Recommendation ---
-    if confidence >= 70:
+    recommendation = "Hold"
+    confidence_in_recommendation = 0 # This will be the confidence in the *specific* recommendation
+
+    # Define thresholds for recommendations
+    BUY_THRESHOLD = 70
+    SELL_THRESHOLD = 30
+
+    if overall_signal_strength >= BUY_THRESHOLD:
         recommendation = "Buy"
-    elif confidence <= 30:
+        # For Buy, confidence is the signal strength itself.
+        confidence_in_recommendation = overall_signal_strength
+    elif overall_signal_strength <= SELL_THRESHOLD:
         recommendation = "Sell"
+        # For Sell, confidence is inverted. A 0 signal strength is 100% confidence in selling.
+        confidence_in_recommendation = 100 - overall_signal_strength
     else:
         recommendation = "Hold"
+        # For Hold, confidence is highest at neutral (50) and decreases towards the thresholds.
+        confidence_in_recommendation = int(100 - abs(overall_signal_strength - 50) * 2)
+
+    confidence_in_recommendation = max(0, min(100, confidence_in_recommendation))
 
     # --- Filter relevant alerts ---
     for alert in all_alerts: # Filter alerts for swing trading relevance
@@ -658,8 +705,9 @@ def evaluate_swing(data: dict) -> dict:
 
     return {
         "recommendation": recommendation,
-        "confidence": confidence,
-        "alerts": swing_specific_alerts
+        "confidence": confidence_in_recommendation,
+        "alerts": swing_specific_alerts,
+        "overall_signal_strength": overall_signal_strength # Good for debugging/advanced view
     }
 
 def evaluate_stock(
@@ -710,7 +758,8 @@ def evaluate_stock(
         "sentiment": overall_news_sentiment,
         "current_price": current_price,
         "ATH": all_time_high,
-        "all_alerts": all_dynamic_alerts # Pass all alerts to sub-functions
+        "all_alerts": all_dynamic_alerts, # Pass all alerts to sub-functions
+        "all_news_articles_data": all_news_articles_data # Pass for potential future use
     }
     
     swing_result = evaluate_swing(data_for_eval)
