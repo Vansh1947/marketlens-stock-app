@@ -428,7 +428,7 @@ def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None, 
 # --- DYNAMIC ALERTS GENERATION ---
 def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None,
                             sma_200: float | None, current_price: float | None,
-                            overall_news_sentiment: float | None, ath_price: float | None, all_news_articles_data: list[tuple[float, float, list[str], str]]) -> list[str]:
+                            overall_news_sentiment: float | None, ath_price: float | None, all_news_articles_data: list[tuple[float, float, list[str], str]], all_news_titles: list[str]) -> list[str]:
     """
     Generates dynamic alerts based on various technical and sentiment conditions.
     all_news_articles_data: List of (sentiment, weight, themes, title) for each article.
