@@ -336,6 +336,7 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
 
     # Volume Simple Moving Average
     indicators['Volume_SMA_5'] = df['Volume'].rolling(window=5).mean().iloc[-1] if len(df) >= 5 else None
+    indicators['Volume_SMA_20'] = df['Volume'].rolling(window=20).mean().iloc[-1] if len(df) >= 20 else None
 
     return indicators
 
@@ -459,7 +460,7 @@ def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None, 
 
 # --- DYNAMIC ALERTS GENERATION ---
 def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None,
-                            sma_200: float | None, current_price: float | None,
+                            sma_200: float | None, current_price: float | None, volume_sma_20: float | None,
                             overall_news_sentiment: float | None, ath_price: float | None, all_news_articles_data: list[tuple[float, float, list[str], str]], all_news_titles: list[str]) -> list[str]:
     """
     Generates dynamic alerts based on various technical and sentiment conditions.
@@ -467,6 +468,11 @@ def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: f
     """
     alerts = []
     processed_news_alerts = set() # Use a set to avoid duplicate news alerts from different articles triggering the same theme
+
+    # Volume Divergence Alert
+    if current_price is not None and sma_10 is not None and current_volume is not None and volume_sma_20 is not None and volume_sma_20 > 0:
+        if current_price > sma_10 and current_volume < (volume_sma_20 * 0.8): # Price up on volume < 80% of average
+             alerts.append("⚠️ Bearish Divergence: Price is rising on declining volume, suggesting weakening momentum.")
 
     # RSI Alerts
     if rsi is not None:
@@ -580,6 +586,7 @@ def evaluate_swing(data: dict) -> dict:
     macd_signal = data.get("MACD_Signal")
     macd_hist = data.get("MACD_Hist") # For histogram slope
     volume_sma_5 = data.get("Volume_SMA_5")
+    volume_sma_20 = data.get("Volume_SMA_20")
     current_volume = data.get("current_volume")
     sentiment = data.get("sentiment", 0.0) # News sentiment
     current_price = data.get("current_price")
@@ -590,7 +597,7 @@ def evaluate_swing(data: dict) -> dict:
     swing_specific_alerts = []
     
     # Check if critical data is missing for a meaningful analysis
-    if any(x is None for x in [sma_5, sma_10, rsi, macd, macd_signal, macd_hist, volume_sma_5, current_volume, current_price, ath]):
+    if any(x is None for x in [sma_5, sma_10, rsi, macd, macd_signal, macd_hist, volume_sma_20, current_volume, current_price, ath]):
         return {
             "recommendation": "Hold",
             "confidence": 0, 
@@ -636,12 +643,31 @@ def evaluate_swing(data: dict) -> dict:
     scores["SMA_10"] = sma_10_score
 
     # Volume Score (10%) - Volume Spike
+    # This logic now incorporates trend confirmation and divergence.
     volume_score = 0
-    if current_volume is not None and volume_sma_5 is not None:
-        if current_volume > volume_sma_5 * VOLUME_HIGH_THRESHOLD_MULTIPLIER:
-            volume_score = 1 # High volume confirms trend
-        elif current_volume < volume_sma_5 * 0.5: # Very low volume
-            volume_score = -0.5 # Lack of interest/momentum
+    price_is_rising = current_price > sma_10 if current_price and sma_10 else False
+    price_is_falling = current_price < sma_10 if current_price and sma_10 else False
+
+    if current_volume and volume_sma_20 and volume_sma_20 > 0:
+        is_volume_surge = current_volume > (volume_sma_20 * VOLUME_HIGH_THRESHOLD_MULTIPLIER)
+        # Declining volume is defined as being significantly below average (e.g., < 80%)
+        is_volume_declining = current_volume < (volume_sma_20 * 0.8)
+
+        if price_is_rising:
+            if is_volume_surge:
+                volume_score = 1.0  # Strong confirmation of uptrend
+            elif is_volume_declining:
+                volume_score = -1.0 # Bearish Divergence: Price up, volume down
+            else:
+                volume_score = 0.2 # Mildly positive, trend is not strongly confirmed
+        elif price_is_falling:
+            if is_volume_surge:
+                volume_score = -1.0 # Strong confirmation of downtrend (capitulation/panic selling)
+            else:
+                volume_score = -0.2 # Mildly negative, downtrend lacks conviction
+        else: # Price is neutral/sideways
+            if is_volume_surge:
+                volume_score = 0.5 # Volume surge in consolidation could signal an upcoming breakout
     scores["Volume"] = volume_score
 
     # News Sentiment Score (20%)
@@ -732,15 +758,17 @@ def evaluate_stock(
     sma_200 = technical_indicators.get('SMA_200') # Kept for general alerts, though not used in swing confidence
     current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
     volume_sma_5 = technical_indicators.get('Volume_SMA_5')
+    volume_sma_20 = technical_indicators.get('Volume_SMA_20')
 
     # Generate all dynamic alerts once, passing all news titles and detailed article data
-    all_dynamic_alerts = generate_dynamic_alerts(rsi, macd_hist, sma_5, sma_10, current_volume, volume_sma_5, sma_50, sma_200,
-                                                 current_price, overall_news_sentiment, all_time_high, all_news_articles_data, all_news_titles)
+    all_dynamic_alerts = generate_dynamic_alerts(rsi, macd_hist, sma_5, sma_10, current_volume, volume_sma_5, sma_50,
+                                                 sma_200, current_price, volume_sma_20, overall_news_sentiment,
+                                                 all_time_high, all_news_articles_data, all_news_titles)
 
     data_for_eval = {
         "SMA_5": technical_indicators.get('SMA_5'),
         "SMA_10": technical_indicators.get('SMA_10'), # Added for swing
-        "SMA_20": technical_indicators.get('SMA_20'),
+        "Volume_SMA_20": technical_indicators.get('Volume_SMA_20'),
         "SMA_50": technical_indicators.get('SMA_50'),
         "SMA_200": technical_indicators.get('SMA_200'),
         "RSI": technical_indicators.get('RSI'),
