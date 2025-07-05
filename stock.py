@@ -460,7 +460,7 @@ def basic_analysis(historical_data: pd.DataFrame, news_sentiment: float = None, 
 
 # --- DYNAMIC ALERTS GENERATION ---
 def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: float | None, sma_10: float | None, current_volume: float | None, volume_sma_5: float | None, sma_50: float | None,
-                            sma_200: float | None, current_price: float | None, volume_sma_20: float | None,
+                            sma_200: float | None, current_price: float | None, historical_volume_sma_20: float | None,
                             overall_news_sentiment: float | None, ath_price: float | None, all_news_articles_data: list[tuple[float, float, list[str], str]], all_news_titles: list[str]) -> list[str]:
     """
     Generates dynamic alerts based on various technical and sentiment conditions.
@@ -469,9 +469,9 @@ def generate_dynamic_alerts(rsi: float | None, macd_hist: float | None, sma_5: f
     alerts = []
     processed_news_alerts = set() # Use a set to avoid duplicate news alerts from different articles triggering the same theme
 
-    # Volume Divergence Alert
-    if current_price is not None and sma_10 is not None and current_volume is not None and volume_sma_20 is not None and volume_sma_20 > 0:
-        if current_price > sma_10 and current_volume < (volume_sma_20 * 0.8): # Price up on volume < 80% of average
+    # Volume Divergence Alert (using a true historical average)
+    if current_price is not None and sma_10 is not None and current_volume is not None and historical_volume_sma_20 is not None and historical_volume_sma_20 > 0:
+        if current_price > sma_10 and current_volume < (historical_volume_sma_20 * 0.8): # Price up on volume < 80% of average
              alerts.append("⚠️ Bearish Divergence: Price is rising on declining volume, suggesting weakening momentum.")
 
     # RSI Alerts
@@ -586,7 +586,7 @@ def evaluate_swing(data: dict) -> dict:
     macd_signal = data.get("MACD_Signal")
     macd_hist = data.get("MACD_Hist") # For histogram slope
     volume_sma_5 = data.get("Volume_SMA_5")
-    volume_sma_20 = data.get("Volume_SMA_20")
+    historical_volume_sma_20 = data.get("historical_volume_sma_20")
     current_volume = data.get("current_volume")
     sentiment = data.get("sentiment", 0.0) # News sentiment
     current_price = data.get("current_price")
@@ -597,7 +597,7 @@ def evaluate_swing(data: dict) -> dict:
     swing_specific_alerts = []
     
     # Check if critical data is missing for a meaningful analysis
-    if any(x is None for x in [sma_5, sma_10, rsi, macd, macd_signal, macd_hist, volume_sma_20, current_volume, current_price, ath]):
+    if any(x is None for x in [sma_5, sma_10, rsi, macd, macd_signal, macd_hist, historical_volume_sma_20, current_volume, current_price, ath]):
         return {
             "recommendation": "Hold",
             "confidence": 0, 
@@ -648,10 +648,10 @@ def evaluate_swing(data: dict) -> dict:
     price_is_rising = current_price > sma_10 if current_price and sma_10 else False
     price_is_falling = current_price < sma_10 if current_price and sma_10 else False
 
-    if current_volume and volume_sma_20 and volume_sma_20 > 0:
-        is_volume_surge = current_volume > (volume_sma_20 * VOLUME_HIGH_THRESHOLD_MULTIPLIER)
+    if current_volume and historical_volume_sma_20 and historical_volume_sma_20 > 0:
+        is_volume_surge = current_volume > (historical_volume_sma_20 * VOLUME_HIGH_THRESHOLD_MULTIPLIER)
         # Declining volume is defined as being significantly below average (e.g., < 80%)
-        is_volume_declining = current_volume < (volume_sma_20 * 0.8)
+        is_volume_declining = current_volume < (historical_volume_sma_20 * 0.8)
 
         if price_is_rising:
             if is_volume_surge:
@@ -758,17 +758,22 @@ def evaluate_stock(
     sma_200 = technical_indicators.get('SMA_200') # Kept for general alerts, though not used in swing confidence
     current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
     volume_sma_5 = technical_indicators.get('Volume_SMA_5')
-    volume_sma_20 = technical_indicators.get('Volume_SMA_20')
+    
+    # Calculate the 20-day SMA of volume on historical data (excluding today)
+    historical_volume_sma_20 = None
+    if len(historical_data) > 20:
+        # Calculate SMA on all data *except* the last day to get a true historical average
+        historical_volume_sma_20 = historical_data['Volume'][:-1].rolling(window=20).mean().iloc[-1]
 
     # Generate all dynamic alerts once, passing all news titles and detailed article data
     all_dynamic_alerts = generate_dynamic_alerts(rsi, macd_hist, sma_5, sma_10, current_volume, volume_sma_5, sma_50,
-                                                 sma_200, current_price, volume_sma_20, overall_news_sentiment,
+                                                 sma_200, current_price, historical_volume_sma_20, overall_news_sentiment,
                                                  all_time_high, all_news_articles_data, all_news_titles)
 
     data_for_eval = {
         "SMA_5": technical_indicators.get('SMA_5'),
         "SMA_10": technical_indicators.get('SMA_10'), # Added for swing
-        "Volume_SMA_20": technical_indicators.get('Volume_SMA_20'),
+        "historical_volume_sma_20": historical_volume_sma_20, # Pass the true historical average
         "SMA_50": technical_indicators.get('SMA_50'),
         "SMA_200": technical_indicators.get('SMA_200'),
         "RSI": technical_indicators.get('RSI'),
