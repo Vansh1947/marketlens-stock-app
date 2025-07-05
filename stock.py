@@ -336,7 +336,6 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
 
     # Volume Simple Moving Average
     indicators['Volume_SMA_5'] = df['Volume'].rolling(window=5).mean().iloc[-1] if len(df) >= 5 else None
-    indicators['Volume_SMA_20'] = df['Volume'].rolling(window=20).mean().iloc[-1] if len(df) >= 20 else None
 
     return indicators
 
@@ -758,7 +757,7 @@ def evaluate_stock(
     sma_200 = technical_indicators.get('SMA_200') # Kept for general alerts, though not used in swing confidence
     current_volume = historical_data['Volume'].iloc[-1] if not historical_data.empty else None
     volume_sma_5 = technical_indicators.get('Volume_SMA_5')
-    
+
     # Calculate the 20-day SMA of volume on historical data (excluding today)
     historical_volume_sma_20 = None
     if len(historical_data) > 20:

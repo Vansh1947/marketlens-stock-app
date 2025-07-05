@@ -86,6 +86,11 @@ def create_price_volume_chart(df_hist, ticker):
     fig.add_trace(go.Bar(x=df_hist.index, y=df_hist['Volume'], name='Volume', marker_color='rgba(100,100,100,0.5)'),
                   row=2, col=1)
 
+    # Add Volume SMA to the volume chart
+    if len(df_hist) >= 20:
+        volume_sma_20 = df_hist['Volume'].rolling(window=20).mean()
+        fig.add_trace(go.Scatter(x=df_hist.index, y=volume_sma_20, mode='lines', name='Volume SMA 20', line=dict(width=1, color='#636EFA')), row=2, col=1)
+
     fig.update_layout(
         title_text=f'{ticker} - Price, SMAs, and Volume',
         xaxis_title='Date',
