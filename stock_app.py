@@ -188,7 +188,7 @@ with col2:
     analysis_period = st.selectbox(
         "Select Analysis Period (for ATH):",
         ("6 Months", "1 Year", "2 Years", "Max"),
-        index=3  # Default to 'Max' for ATH
+        index=0  # Default to '6 Months' for ATH
     )
 
 # Map user-friendly names to yfinance period strings
