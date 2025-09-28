@@ -14,7 +14,6 @@ from stock import (get_stock_data, calculate_technical_indicators, fetch_news_se
     fetch_news_sentiment_from_gnews, analyze_sentiment, basic_analysis, evaluate_stock,
     is_stock_mentioned, get_source_weight
  )
-from artha import generate_ai_advice
 import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
 import pandas as pd # Import pandas
@@ -366,24 +365,3 @@ if st.button("Analyze Stock"):
                 st.info("Swing Trader Alerts:")
                 for alert in swing_analysis_results["swing_trader"]["alerts"]:
                     st.write(f"- {alert}")
-
-            # Artha AI Advisor
-            st.markdown("---") # Visual separator
-            with st.expander("🤖 Artha - AI Financial Advisor", expanded=False):
-                api_key_input = st.text_input("Enter OpenRouter API Key (for Artha):", type="password")
-                if st.button("Get AI Advice from Artha"):
-                    if not api_key_input:
-                        st.error("Please enter your OpenRouter API key.")
-                    else:
-                        # Temporarily set the key
-                        import os
-                        os.environ["OPENAI_API_KEY"] = api_key_input
-                        with st.spinner("Artha is thinking..."):
-                            ai_advice = generate_ai_advice(
-                                swing_analysis_results['swing_trader']['recommendation'],
-                                swing_analysis_results['swing_trader']['confidence'],
-                                swing_analysis_results['swing_trader']['alerts'],
-                                overall_news_sentiment,
-                                company_long_name
-                            )
-                        st.write(ai_advice)
