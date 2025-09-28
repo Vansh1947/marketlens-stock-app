@@ -780,6 +780,7 @@ def evaluate_stock(
         "swing_trader": swing_result
     }
 
+
 # --- UTILITY FUNCTIONS ---
 def analyze_sentiment(text: str) -> float:
     """
