@@ -13,24 +13,20 @@ from datetime import datetime, timedelta
 import re # Added for regex in news filtering
 import random # For sampling headlines
 
-import logging
-
-# Configure logging for the module
-logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Logging removed to eliminate console output
 
 # Conditional imports for external APIs
 try:
     import yfinance as yf
 except ImportError:
     yf = None
-    logger.warning("Yfinance library not found. Stock data functionalities will be skipped.")
+    pass
 
 try:
     import pandas_ta as ta
 except ImportError:
     ta = None
-    logger.warning("Pandas-ta library not found. Technical indicators will be skipped. Please install it by running: pip install pandas-ta")
+    pass
 
 try:
     from newsapi import NewsApiClient
@@ -40,14 +36,14 @@ except ImportError:
     class MockNewsAPIException(Exception):
         pass
     NewsAPIException = MockNewsAPIException # type: ignore
-    logger.warning("Newsapi-python library not found. NewsAPI functionalities will be skipped.")
+    pass
 
 
 try:
     from gnews import GNews
 except ImportError:
     GNews = None
-    logger.warning("Gnews library not found. GNews functionalities will be skipped.")
+    pass
 
 
 
@@ -62,9 +58,9 @@ except ImportError:
 gnews_client = None # Initialize to None
 if GNews:  # Check if the GNews library is installed
     gnews_client = GNews(max_results=20, period='7d') # Default to 20 results from last 7 days
-    logger.info("GNews client initialized (max_results=20, period=7d).")
+    pass
 else: # Ensure this 'else' is aligned with the 'if GNews:' above
-    logger.warning("Gnews library not found. GNews functionalities will be skipped.")
+    pass
 
 
 # --- ANALYSIS THRESHOLDS (Constants for clarity and easy modification) ---
@@ -276,7 +272,7 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
         dict: A dictionary containing calculated technical indicators.
     """
     if len(historical_data) < 5:
-        logger.warning("Insufficient data for calculating technical indicators. Returning empty dict.")
+        pass
         return {}
     if ta is None:
         return {}
@@ -286,7 +282,7 @@ def calculate_technical_indicators(historical_data: pd.DataFrame) -> dict:
     # Ensure enough data for indicators
     # The warning is for SMA200, which is the longest period.
     if len(df) < 200: 
-        logger.warning(f"Not enough historical data ({len(df)} rows) for some indicators (e.g., SMA200 needs 200). Some indicators might be None.")
+        pass
 
     # Simple Moving Averages
     indicators['SMA_5'] = df['Close'].rolling(window=5).mean().iloc[-1] if len(df) >= 5 else None
@@ -826,7 +822,7 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, c
     filters them, and returns a list of (sentiment, weight, themes, title) tuples and titles.
     """
     if not api_key:
-        logger.warning("NewsAPI key not provided. Skipping NewsAPI fetch.")
+        pass
         return [], []
     
     if not NewsApiClient: # Check if the library was successfully imported
@@ -865,9 +861,9 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, c
                     all_titles_for_overall_display.append(title)
             
             if results:
-                logger.info(f"Fetched {len(all_titles_for_overall_display)} relevant articles from NewsAPI for {ticker_symbol}.")
+                pass
                 return results, all_titles_for_overall_display
-        logger.info(f"No relevant news found for {ticker_symbol} from NewsAPI.")
+        pass
         return [], []
     except NewsAPIException as e: # type: ignore [misc] # misc because NewsAPIException could be the mock
         error_details = str(e) # Standard way to get exception message.
@@ -880,15 +876,15 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, c
                              ('get_code' in dir(e) and callable(getattr(e, 'get_code')) and e.get_code() == 'apiKeyInvalid')
         
         if is_rate_limited:
-            logger.warning(f"NewsAPI Rate Limit Exceeded: {error_details}. Please wait before trying again.")
+            pass
         elif is_api_key_invalid:
-            logger.error(f"NewsAPI Key Invalid/Unauthorized: {error_details}. Please check your NEWS_API_KEY environment variable.")
+            pass
         else:
             code_info = f"(Code: {e.get_code()})" if ('get_code' in dir(e) and callable(getattr(e, 'get_code'))) else ""
-            logger.error(f"Error fetching news from NewsAPI for {ticker_symbol} {code_info}: {error_details}")
+            pass
         return [], []
     except Exception as e:
-        logger.error(f"An unexpected error occurred while fetching NewsAPI data for {ticker_symbol}: {e}")
+        pass
         return [], []
 
 def is_stock_mentioned(news_article_text: str, ticker: str, company_name: str | None) -> bool:
@@ -934,7 +930,7 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, com
         tuple: (Average sentiment: float | None, List of (sentiment, weight) tuples: list, List of news titles: list)
     """
     if not gnews_client:
-        logger.warning("GNews client not initialized. Cannot fetch news from GNews.")
+        pass
         return [], [] # Return empty list of (sentiment, weight)
     
     query = f"{ticker_symbol} stock news"
@@ -962,12 +958,12 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, com
                     results.append((combined_sentiment, weight, matched_themes, title))
                     all_titles_for_overall_display.append(title)
             if results:
-                logger.info(f"Fetched {len(all_titles_for_overall_display)} relevant articles from GNews for {ticker_symbol}.")
+                pass
                 return results, all_titles_for_overall_display
-        logger.info(f"No relevant news found for {ticker_symbol} from GNews.")
+        pass
         return [], []
     except Exception as e:
-        logger.error(f"Error fetching or processing GNews for {ticker_symbol}: {e}")
+        pass
         return [], []
 
 def get_stock_data(ticker_symbol: str, period: str = "max") -> tuple[pd.DataFrame | None, float | None, dict | None, str | None]:
@@ -1027,110 +1023,3 @@ def get_stock_data(ticker_symbol: str, period: str = "max") -> tuple[pd.DataFram
         return historical_data, current_price_from_history, company_fundamentals, None # Success
     except Exception as e:
         return None, None, None, f"Error fetching data for {ticker_symbol}: {type(e).__name__} - {e}"
-
-# --- MAIN EXECUTION ---
-if __name__ == "__main__":
-    while True:
-        ticker_input = input("Please enter the stock ticker symbol to analyze (e.g., AAPL, GOOG): ")
-        if ticker_input.strip():
-            TICKER = ticker_input.strip().upper()
-            break
-        else:
-            logger.warning("No ticker symbol entered. Please try again.")
-
-    logger.info(f"Starting comprehensive stock analysis script for {TICKER}...")
-
-    # 1. Get Stock Data
-    historical_data, current_price, company_fundamentals, error = get_stock_data(TICKER, period="max") # Use "max" for ATH
-
-    if error:
-        logger.error(f"Error fetching stock data: {error}")
-    elif historical_data is None or historical_data.empty:
-        logger.warning(f"Could not retrieve sufficient data for {TICKER}. Exiting.")
-    else:
-        # Get company long name for news filtering
-        company_long_name = company_fundamentals.get('longName')
-
-        print(f"\n--- Data for {TICKER} ---")
-        print(f"Current Price: ${current_price:.2f}")
-
-        # 2. Calculate Technical Indicators
-        technical_indicators = calculate_technical_indicators(historical_data)
-        logger.info("\n--- Technical Indicators ---")
-        # Display only relevant indicators for brevity in console output
-        display_indicators = ['SMA_5', 'SMA_10', 'SMA_20', 'SMA_50', 'SMA_200', 'RSI', 'MACD', 'MACD_Signal', 'Volume_SMA_5', 'MACD_Hist']
-        for k in display_indicators:
-            v = technical_indicators.get(k)
-            if v is not None:
-                if isinstance(v, (int, float)):
-                    print(f"{k}: {v:.2f}")
-                else:
-                    print(f"{k}: {v}")
-            else:
-                print(f"{k}: N/A")
-        
-        # Add ATH to fundamentals for consistency with app
-        if 'ath_from_period' not in company_fundamentals:
-            company_fundamentals['ath_from_period'] = historical_data['High'].max()
-            company_fundamentals['period_used_for_ath'] = "max"
-
-
-        # 3. Fetch News Sentiment (from NewsAPI and RSS)
-        # Retrieve API keys from environment for direct script execution
-        env_news_api_key = os.environ.get("NEWS_API_KEY")
-        env_gnews_api_key = os.environ.get("GNEWS_API_KEY")
-
-        all_news_articles_data = [] # List of (sentiment, weight, themes, title) for each article
-        all_news_titles_for_overall_display = [] # Flat list of all titles for overall display
-
-        newsapi_results, newsapi_titles = fetch_news_sentiment_from_newsapi(TICKER, env_news_api_key, company_long_name)
-        all_news_articles_data.extend(newsapi_results)
-        all_news_titles_for_overall_display.extend(newsapi_titles)
-
-
-        gnews_results, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key, company_long_name)
-        all_news_articles_data.extend(gnews_results)
-        all_news_titles_for_overall_display.extend(gnews_titles)
-
-        overall_news_sentiment = None
-        if all_news_articles_data:
-            # Calculate weighted average from all articles' data
-            total_sentiment_score = sum(s * w for s, w, _, _ in all_news_articles_data)
-            total_weight = sum(w for s, w, _, _ in all_news_articles_data)
-            if total_weight > 0:
-                overall_news_sentiment = total_sentiment_score / total_weight
-            else:
-                overall_news_sentiment = None # Avoid division by zero if all weights are zero
-
-        logger.info("\n--- News Sentiment ---")
-        if overall_news_sentiment is not None:
-            logger.info(f"Overall News Sentiment: {overall_news_sentiment:.2f}")
-            logger.info("Recent News Titles (sample):")
-            # Convert to set to get unique titles, then back to list for slicing
-            for i, title in enumerate(list(set(all_news_titles_for_overall_display))[:10]):
-                logger.info(f"  - {title}")
-        else:
-            logger.warning("Could not fetch news sentiment from any source.")
-
-        # 4. Basic Analysis (using overall news sentiment)
-        basic_recommendation, basic_confidence, basic_reason = basic_analysis(historical_data, overall_news_sentiment, all_news_titles_for_overall_display)
-        logger.info(f"\n--- Basic Analysis for {TICKER} ---")
-        logger.info(f"Recommendation: {basic_recommendation} (Confidence: {basic_confidence}%)")
-        logger.info(f"Reason: {basic_reason}")
-
-        # Swing Trader Recommendation System
-        logger.info(f"\n--- Swing Trader Recommendation System for {TICKER} ---")
-        # ATH is now part of company_fundamentals
-        all_time_high_for_period = company_fundamentals.get('ath_from_period')
-        swing_analysis_results = evaluate_stock(
-            historical_data, technical_indicators, company_fundamentals, overall_news_sentiment, current_price, all_time_high_for_period, all_news_articles_data, all_news_titles_for_overall_display
-        )
-        logger.info("\nSwing Trader Recommendation:")
-        logger.info(f"  Recommendation: {swing_analysis_results['swing_trader']['recommendation']}")
-        logger.info(f"  Confidence: {swing_analysis_results['swing_trader']['confidence']}%")
-        logger.info("  Alerts:")
-        for alert in swing_analysis_results['swing_trader']['alerts']:
-            logger.info(f"    - {alert}")
-
-
-    logger.info("\nScript finished.")
