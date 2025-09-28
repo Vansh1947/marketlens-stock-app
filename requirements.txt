@@ -33,7 +33,7 @@ newsapi-python==0.2.7
 nltk==3.9.1
 numpy==1.26.3
 packaging==24.2
-pandas-ta==0.3.14b0 # Ensure this specific version
+pandas-ta
 pandas==2.2.3
 peewee==3.18.1
 pillow==11.2.1
