@@ -16,7 +16,7 @@ import random # For sampling headlines
 import logging
 
 # Configure logging for the module
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Conditional imports for external APIs
