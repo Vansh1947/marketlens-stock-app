@@ -370,13 +370,20 @@ if st.button("Analyze Stock"):
             # Artha AI Advisor
             st.markdown("---") # Visual separator
             with st.expander("🤖 Artha - AI Financial Advisor", expanded=False):
+                api_key_input = st.text_input("Enter OpenRouter API Key (for Artha):", type="password")
                 if st.button("Get AI Advice from Artha"):
-                    with st.spinner("Artha is thinking..."):
-                        ai_advice = generate_ai_advice(
-                            swing_analysis_results['swing_trader']['recommendation'],
-                            swing_analysis_results['swing_trader']['confidence'],
-                            swing_analysis_results['swing_trader']['alerts'],
-                            overall_news_sentiment,
-                            company_long_name
-                        )
-                    st.write(ai_advice)
+                    if not api_key_input:
+                        st.error("Please enter your OpenRouter API key.")
+                    else:
+                        # Temporarily set the key
+                        import os
+                        os.environ["OPENAI_API_KEY"] = api_key_input
+                        with st.spinner("Artha is thinking..."):
+                            ai_advice = generate_ai_advice(
+                                swing_analysis_results['swing_trader']['recommendation'],
+                                swing_analysis_results['swing_trader']['confidence'],
+                                swing_analysis_results['swing_trader']['alerts'],
+                                overall_news_sentiment,
+                                company_long_name
+                            )
+                        st.write(ai_advice)
