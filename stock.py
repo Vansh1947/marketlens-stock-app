@@ -42,11 +42,6 @@ except ImportError:
     NewsAPIException = MockNewsAPIException # type: ignore
     logger.warning("Newsapi-python library not found. NewsAPI functionalities will be skipped.")
 
-try:
-    import feedparser
-except ImportError:
-    feedparser = None
-    logger.warning("Feedparser library not found. RSS feed functionalities will be skipped.")
 
 try:
     from gnews import GNews
@@ -55,10 +50,6 @@ except ImportError:
     logger.warning("Gnews library not found. GNews functionalities will be skipped.")
 
 
-# --- IMPORTANT: INSTALL NECESSARY LIBRARIES (for direct script execution) ---
-# If you encounter ModuleNotFoundError for the libraries below, run:
-# pip install yfinance textblob newsapi-python feedparser gnews pandas-ta
-# --- END OF INSTALLATION INSTRUCTIONS ---
 
 
 # --- CONFIGURATION (BEST PRACTICE: USING ENVIRONMENT VARIABLES) ---
@@ -75,8 +66,6 @@ if GNews:  # Check if the GNews library is installed
 else: # Ensure this 'else' is aligned with the 'if GNews:' above
     logger.warning("Gnews library not found. GNews functionalities will be skipped.")
 
-# Define the base Google News RSS URL (will be made ticker-specific dynamically)
-BASE_GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
 
 # --- ANALYSIS THRESHOLDS (Constants for clarity and easy modification) ---
 RSI_OVERSOLD_THRESHOLD = 30
@@ -102,11 +91,6 @@ SWING_RSI_SELL = 70
 SWING_SENTIMENT_SELL_THRESHOLD = -0.2
 SWING_ATH_PREMIUM_SELL = 0.98 # Current price >= 98% of ATH
 
-# Long-Term Investor Thresholds (These are no longer used in the main app logic but kept for reference)
-LT_PE_BUY_THRESHOLD = 40
-LT_EPS_GROWTH_BUY_THRESHOLD = 0.0 # EPS Growth > 0
-LT_ROE_BUY_THRESHOLD = 0.15 # 15%
-LT_DE_BUY_THRESHOLD = 0.80 # 80%
 
 # New Alert Thresholds (can be refined)
 MACD_HIST_BULLISH_THRESHOLD = 0.5
@@ -938,43 +922,6 @@ def is_stock_mentioned(news_article_text: str, ticker: str, company_name: str | 
     
     return bool(combined_pattern.search(news_article_text))
 
-def fetch_news_sentiment_from_rss(rss_url: str, ticker_symbol: str, company_name: str | None) -> tuple[list[tuple[float, float, list[str], str]], list[str]]:
-    """
-    Fetches news from an RSS feed, filters by ticker symbol,
-    and returns a list of (sentiment, weight, themes, title) tuples and titles.
-    """
-    if feedparser is None:
-        return [], []
-
-    results = []
-    all_titles_for_overall_display = []
-    try:
-        feed = feedparser.parse(rss_url)
-        if not feed.entries:
-            return [], []
-
-        for entry in feed.entries:
-            title = entry.get('title', '')
-            summary = entry.get('summary', '') # Use .get() for safety
-            source_name = entry.get('source', {}).get('title', feed.get('feed', {}).get('title', 'Google News')) # Fallback to feed title
-            article_text = title + " " + summary
-
-            if is_stock_mentioned(article_text, ticker_symbol, company_name):
-                raw_sentiment = analyze_sentiment(article_text)
-                keyword_sentiment, matched_themes = analyze_news_keywords(article_text)
-                combined_sentiment = max(-1.0, min(1.0, raw_sentiment + keyword_sentiment))
-                weight = get_source_weight(source_name)
-                results.append((combined_sentiment, weight, matched_themes, title))
-                all_titles_for_overall_display.append(title)
-
-        if results:
-            logger.info(f"Fetched {len(all_titles_for_overall_display)} relevant articles from RSS for {ticker_symbol}.")
-            return results, all_titles_for_overall_display
-        logger.info(f"No relevant news found for {ticker_symbol} in RSS feed.")
-        return [], []
-    except Exception as e:
-        logger.error(f"Error fetching RSS news from {rss_url}: {e}")
-        return [], []
 
 def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, company_name: str | None) -> tuple[list[tuple[float, float, list[str], str]], list[str]]: # type: ignore
     """
@@ -1140,10 +1087,6 @@ if __name__ == "__main__":
         all_news_articles_data.extend(newsapi_results)
         all_news_titles_for_overall_display.extend(newsapi_titles)
 
-        ticker_specific_rss_url = BASE_GOOGLE_NEWS_RSS_URL.format(ticker=TICKER)
-        rss_results, rss_titles = fetch_news_sentiment_from_rss(ticker_specific_rss_url, TICKER, company_long_name)
-        all_news_articles_data.extend(rss_results)
-        all_news_titles_for_overall_display.extend(rss_titles)
 
         gnews_results, gnews_titles = fetch_news_sentiment_from_gnews(TICKER, env_gnews_api_key, company_long_name)
         all_news_articles_data.extend(gnews_results)

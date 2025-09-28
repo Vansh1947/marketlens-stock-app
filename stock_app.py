@@ -12,8 +12,8 @@ st.set_page_config(
 # Note: The return type of news fetching functions changed to include matched themes.
 from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
     fetch_news_sentiment_from_gnews, analyze_sentiment, basic_analysis, evaluate_stock,
-    is_stock_mentioned, get_source_weight, fetch_news_sentiment_from_rss # Added fetch_news_sentiment_from_rss
-)
+    is_stock_mentioned, get_source_weight
+ )
 import numpy as np # Needed for np.mean if sentiments are combined
 import plotly.graph_objects as go
 import pandas as pd # Import pandas

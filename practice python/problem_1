@@ -1,3 +1,0 @@
-name = input("enter your name: ")
-print(f"good afternoon {name}")
-name2= input(name)

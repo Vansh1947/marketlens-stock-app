@@ -1,8 +1,6 @@
-altair==5.5.0
 annotated-types==0.7.0
 anyio==4.9.0
 attrs==25.3.0
-beautifulsoup4==4.13.4
 blinker==1.9.0
 cachetools==5.5.2
 certifi==2025.4.26
@@ -34,7 +32,6 @@ narwhals==1.41.0
 newsapi-python==0.2.7
 nltk==3.9.1
 numpy==1.26.3
-openai==1.82.0
 packaging==24.2
 pandas-ta==0.3.14b0 # Ensure this specific version
 pandas==2.2.3
@@ -48,7 +45,6 @@ pycparser==2.22
 pydantic==2.11.5
 pydantic_core==2.33.2
 pydeck==0.9.1
-pyjokes==0.8.3
 python-dateutil==2.9.0.post0
 pytz==2025.2
 referencing==0.36.2
