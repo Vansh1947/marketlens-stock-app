@@ -11,7 +11,7 @@ st.set_page_config(
 # Assuming stock.py is in the same directory or accessible via PYTHONPATH.
 # Note: The return type of news fetching functions changed to include matched themes.
 from stock import (get_stock_data, calculate_technical_indicators, fetch_news_sentiment_from_newsapi,
-    fetch_news_sentiment_from_gnews, analyze_sentiment, basic_analysis, evaluate_stock,
+    fetch_news_sentiment_from_gnews, fetch_news_sentiment_from_yfinance, analyze_sentiment, basic_analysis, evaluate_stock,
     is_stock_mentioned, get_source_weight
  )
 import numpy as np # Needed for np.mean if sentiments are combined
@@ -43,6 +43,9 @@ def cached_calculate_technical_indicators(historical_data):
 def cached_fetch_news_sentiment_from_newsapi(ticker_symbol, api_key, company_name):
     return fetch_news_sentiment_from_newsapi(ticker_symbol, api_key, company_name)
 
+@st.cache_data(ttl=14400)
+def cached_fetch_news_sentiment_from_yfinance(ticker_symbol, company_name):
+    return fetch_news_sentiment_from_yfinance(ticker_symbol, company_name)
 @st.cache_data(ttl=14400)
 def cached_fetch_news_sentiment_from_gnews(ticker_symbol, api_key, company_name):
     return fetch_news_sentiment_from_gnews(ticker_symbol, api_key, company_name)
@@ -306,11 +309,16 @@ if st.button("Analyze Stock"):
 
             # Attempt GNews if key is present (useful for broader coverage or specific regions like India)
             # Check if the GNews API key is configured
-            if APP_GNEWS_API_KEY: 
+            if APP_GNEWS_API_KEY:
                 st.write(f"Attempting to fetch news from GNews for {ticker_symbol_processed}...") # User feedback
                 gnews_results, gnews_titles = cached_fetch_news_sentiment_from_gnews(ticker_symbol_processed, APP_GNEWS_API_KEY, company_long_name) # Pass the API key
                 all_news_articles_data.extend(gnews_results)
                 all_news_titles_for_overall_display.extend(gnews_titles)
+
+            # Fallback to yfinance news for broader coverage, especially for Indian stocks
+            yfinance_results, yfinance_titles = cached_fetch_news_sentiment_from_yfinance(ticker_symbol_processed, company_long_name)
+            all_news_articles_data.extend(yfinance_results)
+            all_news_titles_for_overall_display.extend(yfinance_titles)
 
             overall_news_sentiment = None
             if all_news_articles_data: # Check if there's any news data

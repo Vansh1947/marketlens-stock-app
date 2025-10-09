@@ -838,7 +838,9 @@ def fetch_news_sentiment_from_newsapi(ticker_symbol: str, api_key: str | None, c
         from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
         to_date = datetime.now().strftime('%Y-%m-%d')
 
-        articles_response = newsapi_client.get_everything(q=ticker_symbol,
+        # For Indian stocks, use company name for better results
+        query_term = company_name if ticker_symbol.endswith('.NS') and company_name else ticker_symbol
+        articles_response = newsapi_client.get_everything(q=query_term,
                                                           language='en',
                                                           sort_by='relevancy',
                                                           from_param=from_date,
@@ -934,7 +936,11 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, com
         pass
         return [], [] # Return empty list of (sentiment, weight)
     
-    query = f"{ticker_symbol} stock news"
+    # For Indian stocks, use company name for better results
+    if ticker_symbol.endswith('.NS') and company_name:
+        query = f"{company_name} India stock news"
+    else:
+        query = f"{ticker_symbol} stock news"
     results = []
     all_titles_for_overall_display = []
     try:
@@ -965,6 +971,40 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, com
         return [], []
     except Exception as e:
         pass
+        return [], []
+def fetch_news_sentiment_from_yfinance(ticker_symbol: str, company_name: str | None) -> tuple[list[tuple[float, float, list[str], str]], list[str]]:
+    """
+    Fetches news from yfinance for the given ticker and calculates sentiment.
+    This serves as a fallback for stocks where other APIs have limited coverage.
+    """
+    if yf is None:
+        return [], []
+    
+    results = []
+    all_titles_for_overall_display = []
+    try:
+        stock = yf.Ticker(ticker_symbol)
+        news_items = stock.news  # List of news dicts
+        
+        if news_items:
+            for item in news_items[:20]:  # Limit to 20
+                title = item.get('title', '')
+                # yfinance news may not have description, so use title only
+                article_text = title
+                
+                if is_stock_mentioned(article_text, ticker_symbol, company_name):
+                    raw_sentiment = analyze_sentiment(article_text)
+                    keyword_sentiment, matched_themes = analyze_news_keywords(article_text)
+                    combined_sentiment = max(-1.0, min(1.0, raw_sentiment + keyword_sentiment))
+                    # For yfinance, source is publisher
+                    source_name = item.get('publisher', 'Yahoo Finance')
+                    weight = get_source_weight(source_name)
+                    results.append((combined_sentiment, weight, matched_themes, title))
+                    all_titles_for_overall_display.append(title)
+            if results:
+                return results, all_titles_for_overall_display
+        return [], []
+    except Exception as e:
         return [], []
 
 def get_stock_data(ticker_symbol: str, period: str = "max") -> tuple[pd.DataFrame | None, float | None, dict | None, str | None]:
