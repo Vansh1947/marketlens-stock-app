@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MarketLens | Vercel Stock Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Space+Grotesk:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="bg-grid"></div>
+    <div class="glow glow-a"></div>
+    <div class="glow glow-b"></div>
+
+    <main class="app-shell">
+      <header class="hero">
+        <p class="eyebrow">Vercel Edition</p>
+        <h1>MarketLens</h1>
+        <p class="subtitle">
+          Enhanced stock intelligence dashboard with technical signals, weighted news sentiment, and swing-trader guidance.
+        </p>
+      </header>
+
+      <section class="card control-card">
+        <form id="analyze-form" autocomplete="off">
+          <div class="field-group">
+            <label for="ticker-input">Ticker</label>
+            <input id="ticker-input" type="text" value="GOOG" maxlength="12" placeholder="AAPL or RELIANCE.NS" />
+          </div>
+          <div class="field-group">
+            <label for="period-select">Period</label>
+            <select id="period-select">
+              <option value="6mo">6 Months</option>
+              <option value="1y">1 Year</option>
+              <option value="2y">2 Years</option>
+              <option value="max">Max</option>
+            </select>
+          </div>
+          <button id="analyze-button" type="submit">Analyze</button>
+        </form>
+        <div id="status-pill" class="status-pill status-idle">Ready</div>
+      </section>
+
+      <section class="metrics-grid">
+        <article class="card metric">
+          <p>Current Price</p>
+          <h3 id="metric-price">-</h3>
+        </article>
+        <article class="card metric">
+          <p>Market Cap</p>
+          <h3 id="metric-marketcap">-</h3>
+        </article>
+        <article class="card metric">
+          <p>P/E Ratio</p>
+          <h3 id="metric-pe">-</h3>
+        </article>
+        <article class="card metric">
+          <p>ATH (Period)</p>
+          <h3 id="metric-ath">-</h3>
+        </article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="card insight">
+          <p class="insight-label">Swing Recommendation</p>
+          <h3 id="swing-reco">-</h3>
+          <p id="swing-confidence" class="muted">Confidence: -</p>
+        </article>
+        <article class="card insight">
+          <p class="insight-label">Basic Recommendation</p>
+          <h3 id="basic-reco">-</h3>
+          <p id="basic-confidence" class="muted">Confidence: -</p>
+        </article>
+        <article class="card insight">
+          <p class="insight-label">News Sentiment</p>
+          <h3 id="sentiment-score">-</h3>
+          <p id="article-count" class="muted">Articles: -</p>
+        </article>
+      </section>
+
+      <section class="card chart-card">
+        <div class="chart-head">
+          <h2>Price + Volume</h2>
+          <p id="company-label" class="muted">No company loaded</p>
+        </div>
+        <div id="price-chart" class="chart"></div>
+      </section>
+
+      <section class="chart-split">
+        <article class="card chart-card">
+          <h2>RSI (14)</h2>
+          <div id="rsi-chart" class="chart small"></div>
+        </article>
+        <article class="card chart-card">
+          <h2>MACD</h2>
+          <div id="macd-chart" class="chart small"></div>
+        </article>
+      </section>
+
+      <section class="detail-split">
+        <article class="card details">
+          <h2>Swing Alerts</h2>
+          <ul id="alerts-list" class="list"></ul>
+        </article>
+        <article class="card details">
+          <h2>News Headlines</h2>
+          <ul id="news-list" class="list"></ul>
+        </article>
+      </section>
+
+      <section class="card reason-card">
+        <h2>Basic Analysis Reason</h2>
+        <p id="basic-reason" class="muted">Run an analysis to view the rationale.</p>
+      </section>
+    </main>
+
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
+

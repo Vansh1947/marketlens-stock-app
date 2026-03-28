@@ -6,3 +6,4 @@ env/
 .DS_Store
 .streamlit/secrets.toml
 .vscode/
+.vercel/
