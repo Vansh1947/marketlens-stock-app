@@ -6,6 +6,7 @@ including dynamic alert generation, refined news sentiment analysis with source 
 and a dedicated swing recommendation system.
 """
 import os
+import time
 import pandas as pd
 import numpy as np
 from textblob import TextBlob
@@ -18,9 +19,14 @@ import random # For sampling headlines
 # Conditional imports for external APIs
 try:
     import yfinance as yf
+    try:
+        from yfinance.exceptions import YFRateLimitError
+    except ImportError:
+        # Older yfinance versions may not have this exception class
+        YFRateLimitError = Exception  # type: ignore
 except ImportError:
     yf = None
-    pass
+    YFRateLimitError = Exception  # type: ignore
 
 try:
     import pandas_ta as ta
@@ -972,6 +978,25 @@ def fetch_news_sentiment_from_gnews(ticker_symbol: str, api_key: str | None, com
     except Exception as e:
         pass
         return [], []
+def _retry_yf_call(func, max_retries: int = 3, base_delay: float = 2.0):
+    """
+    Retries a yfinance callable on YFRateLimitError with exponential backoff.
+    Returns the result on success, or raises the last exception on exhaustion.
+    """
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except YFRateLimitError as e:
+            last_exc = e
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)  # 2s, 4s, 8s
+                time.sleep(delay)
+        except Exception:
+            raise
+    raise last_exc
+
+
 def fetch_news_sentiment_from_yfinance(ticker_symbol: str, company_name: str | None) -> tuple[list[tuple[float, float, list[str], str]], list[str]]:
     """
     Fetches news from yfinance for the given ticker and calculates sentiment.
@@ -979,24 +1004,22 @@ def fetch_news_sentiment_from_yfinance(ticker_symbol: str, company_name: str | N
     """
     if yf is None:
         return [], []
-    
+
     results = []
     all_titles_for_overall_display = []
     try:
         stock = yf.Ticker(ticker_symbol)
-        news_items = stock.news  # List of news dicts
-        
+        news_items = _retry_yf_call(lambda: stock.news, max_retries=2, base_delay=1.5)
+
         if news_items:
             for item in news_items[:20]:  # Limit to 20
                 title = item.get('title', '')
-                # yfinance news may not have description, so use title only
                 article_text = title
-                
+
                 if is_stock_mentioned(article_text, ticker_symbol, company_name):
                     raw_sentiment = analyze_sentiment(article_text)
                     keyword_sentiment, matched_themes = analyze_news_keywords(article_text)
                     combined_sentiment = max(-1.0, min(1.0, raw_sentiment + keyword_sentiment))
-                    # For yfinance, source is publisher
                     source_name = item.get('publisher', 'Yahoo Finance')
                     weight = get_source_weight(source_name)
                     results.append((combined_sentiment, weight, matched_themes, title))
@@ -1004,12 +1027,16 @@ def fetch_news_sentiment_from_yfinance(ticker_symbol: str, company_name: str | N
             if results:
                 return results, all_titles_for_overall_display
         return [], []
-    except Exception as e:
+    except YFRateLimitError:
+        # News fetch is non-critical; return empty gracefully
+        return [], []
+    except Exception:
         return [], []
 
 def get_stock_data(ticker_symbol: str, period: str = "max") -> tuple[pd.DataFrame | None, float | None, dict | None, str | None]:
     """
     Fetches historical stock data and basic company fundamentals using yfinance.
+    Uses fast_info for lightweight price data and retries on rate limit errors.
 
     Args:
         ticker_symbol (str): The stock ticker symbol.
@@ -1021,46 +1048,87 @@ def get_stock_data(ticker_symbol: str, period: str = "max") -> tuple[pd.DataFram
                Returns (None, None, None, error_message) on failure.
     """
     if yf is None:
-        return None, None, None, "Yfinance library not available. Cannot fetch stock data." # Return error message
+        return None, None, None, "yfinance library not available. Cannot fetch stock data."
 
     try:
         stock = yf.Ticker(ticker_symbol)
-        # Attempt to fetch company info first to validate ticker and get fundamentals
-        company_fundamentals = stock.info
 
-        # A common sign of an invalid/delisted ticker is an empty info dict or missing key financial fields
-        if not company_fundamentals or \
-           (company_fundamentals.get('regularMarketPrice') is None and \
-            company_fundamentals.get('longName') is None and \
-            company_fundamentals.get('marketCap') is None): # Check for essential fields
-            return None, None, None, f"No valid data or fundamentals found for '{ticker_symbol}'. It might be an invalid ticker, delisted, or data is unavailable."
+        # --- Step 1: Fetch historical data (most important, retry on rate limit) ---
+        try:
+            historical_data = _retry_yf_call(
+                lambda: stock.history(period=period),
+                max_retries=3,
+                base_delay=2.0
+            )
+        except YFRateLimitError:
+            return None, None, None, (
+                f"Yahoo Finance is temporarily rate-limiting requests for '{ticker_symbol}'. "
+                "Please wait 30–60 seconds and try again."
+            )
 
-        # Fetch historical data for the specified period
-        historical_data = stock.history(period=period)
+        if historical_data is None or historical_data.empty:
+            return None, None, None, (
+                f"No historical data found for '{ticker_symbol}' for the period '{period}'. "
+                "Check the ticker symbol and try again."
+            )
 
-        if historical_data.empty:
-            # We might have fundamentals, but no historical data for the specified period
-            current_price_from_info = company_fundamentals.get('regularMarketPrice') or company_fundamentals.get('currentPrice')
-            # It's unusual to have fundamentals but no historical data for a valid, active ticker
-            # but we return what we have along with a message if historical data is empty.
-            return None, current_price_from_info, company_fundamentals, f"No historical data found for '{ticker_symbol}' for the period '{period}'. Some fundamental data might be available."
+        # --- Step 2: Get current price from historical data (no extra API call) ---
+        current_price_from_history = None
+        ath_from_period = None
+        if 'Close' in historical_data.columns:
+            current_price_from_history = float(historical_data['Close'].iloc[-1])
+            ath_from_period = float(historical_data['High'].max())
 
-        # Ensure 'Close' column exists and has data before accessing iloc[-1]
-        if 'Close' in historical_data.columns and not historical_data.empty:
-            current_price_from_history = historical_data['Close'].iloc[-1]
-            # Calculate All-Time High from the fetched historical data period
-            # This is the high for the selected period, not the true all-time high unless period='max'
-            ath_from_period = historical_data['High'].max() # Use 'High' column for ATH
-            # Add ATH to company_fundamentals for easy access in other functions
+        # --- Step 3: Fetch fundamentals using fast_info first (single lightweight request) ---
+        company_fundamentals = {}
+        try:
+            fast_info = _retry_yf_call(lambda: stock.fast_info, max_retries=2, base_delay=1.5)
+            # fast_info attributes — map to the same keys stock.info uses
+            company_fundamentals['longName'] = getattr(fast_info, 'title', None) or ticker_symbol
+            company_fundamentals['regularMarketPrice'] = getattr(fast_info, 'last_price', None) or current_price_from_history
+            company_fundamentals['marketCap'] = getattr(fast_info, 'market_cap', None)
+            company_fundamentals['currency'] = getattr(fast_info, 'currency', 'USD')
+            company_fundamentals['exchange'] = getattr(fast_info, 'exchange', None)
+        except YFRateLimitError:
+            # fast_info rate limited — use minimal fallback from historical data
+            company_fundamentals['longName'] = ticker_symbol
+            company_fundamentals['regularMarketPrice'] = current_price_from_history
+        except Exception:
+            company_fundamentals['longName'] = ticker_symbol
+            company_fundamentals['regularMarketPrice'] = current_price_from_history
+
+        # Validate we have at least a company name or price
+        if not company_fundamentals.get('longName') and company_fundamentals.get('regularMarketPrice') is None:
+            return None, None, None, (
+                f"No valid data found for '{ticker_symbol}'. "
+                "It might be an invalid ticker or data is temporarily unavailable."
+            )
+
+        # --- Step 4: Fetch detailed fundamentals (best-effort, non-blocking) ---
+        try:
+            full_info = _retry_yf_call(lambda: stock.info, max_retries=2, base_delay=2.0)
+            if full_info and isinstance(full_info, dict):
+                # Merge full info, but keep what we already have from fast_info
+                for key, value in full_info.items():
+                    if key not in company_fundamentals or company_fundamentals[key] is None:
+                        company_fundamentals[key] = value
+        except YFRateLimitError:
+            # Fundamentals unavailable due to rate limit — continue with fast_info data
+            pass
+        except Exception:
+            pass
+
+        # Store ATH and period
+        if ath_from_period is not None:
             company_fundamentals['ath_from_period'] = ath_from_period
-            company_fundamentals['period_used_for_ath'] = period # Store the period for context
+        company_fundamentals['period_used_for_ath'] = period
 
-        else:
-            # Fallback if 'Close' is missing or empty, though unlikely if historical_data itself is not empty
-            current_price_from_history = company_fundamentals.get('regularMarketPrice') or company_fundamentals.get('currentPrice')
-            if current_price_from_history is None: # If no price found at all
-                 return historical_data, None, company_fundamentals, f"Historical data fetched but 'Close' price is missing for {ticker_symbol}."
+        return historical_data, current_price_from_history, company_fundamentals, None  # Success
 
-        return historical_data, current_price_from_history, company_fundamentals, None # Success
+    except YFRateLimitError as e:
+        return None, None, None, (
+            f"Yahoo Finance rate limit reached for '{ticker_symbol}'. "
+            "Please wait a minute and try again. (YFRateLimitError)"
+        )
     except Exception as e:
-        return None, None, None, f"Error fetching data for {ticker_symbol}: {type(e).__name__} - {e}"
+        return None, None, None, f"{type(e).__name__}: {e}"

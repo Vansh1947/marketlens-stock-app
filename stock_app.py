@@ -217,7 +217,7 @@ if st.button("Analyze Stock"):
             historical_data, current_price, company_fundamentals, error = cached_get_stock_data(ticker_symbol_processed, period=selected_period_yf)
 
         if error:
-            st.error(f"Error fetching data for {ticker_symbol_processed}: {error}")
+            st.error(f"⚠️ {error}")
         elif historical_data is None or historical_data.empty:
             st.warning(f"Could not retrieve sufficient data for {ticker_symbol_processed}.")
         else:
